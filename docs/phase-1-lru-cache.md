@@ -235,14 +235,13 @@ public V get(K key) {
 }
 ```
 
-**Background TTL cleaner:**
+**Background TTL cleaner (Java 21 — virtual thread factory):**
 ```java
 private final ScheduledExecutorService cleaner =
-    Executors.newSingleThreadScheduledExecutor(r -> {
-        Thread t = new Thread(r, "cache-cleaner");
-        t.setDaemon(true);   // MUST be daemon — see Watch Out For
-        return t;
-    });
+    Executors.newSingleThreadScheduledExecutor(
+        Thread.ofVirtual().name("cache-cleaner").factory()
+    );
+// Virtual threads are daemon threads by default — no setDaemon(true) needed.
 
 // In constructor:
 cleaner.scheduleAtFixedRate(this::removeExpiredEntries, 1, 1, TimeUnit.SECONDS);
@@ -288,9 +287,10 @@ mutate the linked list, causing ConcurrentModificationException or silent data c
 This is the most common mistake in naive LRU implementations. It is also the most common
 interview question about this exact design. Know this cold.
 
-**Daemon thread:** The cleaner thread must be a daemon thread. If `setDaemon(true)` is not
-called, the JVM will not exit after your test finishes — it will hang waiting for the
-non-daemon cleaner thread to terminate. This is one of the hardest-to-debug hangs in Java.
+**Daemon thread:** The cleaner thread must be a daemon thread. Virtual threads (Java 21) are
+daemon threads by default, so `Thread.ofVirtual()` eliminates this footgun. If you ever switch
+to a platform thread factory, add `setDaemon(true)` explicitly — otherwise the JVM will not
+exit after tests finish, hanging indefinitely on the non-daemon cleaner thread.
 
 **`removeEldestEntry` and the RemovalListener:** `removeEldestEntry` is called while the
 map is being mutated (inside `put`). The `RemovalListener` callback fires inside this method.
@@ -300,6 +300,10 @@ try-catch.
 **`close()` idempotency:** `ScheduledExecutorService.shutdown()` is idempotent by contract,
 but calling `close()` from multiple threads without the `AtomicBoolean` guard can cause
 confusion about the closed state. The guard makes the semantics explicit.
+
+**`SequencedMap` (Java 21):** `LinkedHashMap` now implements `SequencedMap`. If you need
+the eldest entry (e.g., in `removeEldestEntry` or a manual eviction check), you can call
+`map.firstEntry()` directly instead of using an iterator workaround.
 
 ---
 

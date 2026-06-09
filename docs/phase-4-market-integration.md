@@ -77,8 +77,13 @@ private final Cache<String, MarketEvent> cache;
 private final MarketDataSimulator simulator;
 private final BurstScheduler scheduler;
 private final BlockingQueue<MarketEvent> eventQueue;  // bounded
-private final ExecutorService producer;
-private final ExecutorService consumer;
+// Java 21: virtual threads — daemon by default, no thread pool sizing needed
+private final ExecutorService producer = Executors.newThreadPerTaskExecutor(
+    Thread.ofVirtual().name("market-data-producer").factory()
+);
+private final ExecutorService consumer = Executors.newThreadPerTaskExecutor(
+    Thread.ofVirtual().name("market-data-consumer").factory()
+);
 private final AtomicLong eventsProduced = new AtomicLong();
 private final AtomicLong eventsConsumed = new AtomicLong();
 private final AtomicLong eventsDropped = new AtomicLong();
@@ -111,8 +116,10 @@ seen by the producer thread, causing the loop to run forever.
 rather than `eventQueue.take()`. `take()` blocks indefinitely; with a timeout, the consumer
 loop can check `running` and exit cleanly on shutdown.
 
-**Thread naming** — name threads with descriptive names: `"market-data-producer"` and
-`"market-data-consumer"`. Unnamed threads make thread dumps unreadable.
+**Thread naming** — threads are already named via `Thread.ofVirtual().name("...")` in the
+executor factory. Unnamed threads make thread dumps unreadable. Virtual threads also show up
+in thread dumps with the name you give them, so this matters even more than with platform
+threads.
 
 **`close()`** — must stop both producer and consumer threads and await termination.
 Use `ExecutorService.shutdown()` followed by `awaitTermination(5, TimeUnit.SECONDS)`.

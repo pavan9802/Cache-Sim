@@ -19,7 +19,7 @@ is never blocked.
 
 - Phase 2A and 2B exit gates fully passed
 - `LRUCache` is the foundation (LoadingCache wraps LRU logic)
-- `CompletableFuture` and `ConcurrentHashMap` available in Java 17 stdlib
+- `CompletableFuture` and `ConcurrentHashMap` available in Java 21 stdlib
 
 ---
 
@@ -99,6 +99,10 @@ public interface LoadingCache<K, V> extends Cache<K, V> {
 // In-flight loads: key → future being computed by exactly one thread
 private final ConcurrentHashMap<K, CompletableFuture<V>> inFlight = new ConcurrentHashMap<>();
 
+// Java 21: use a virtual thread executor so loader threads are cheap and daemon by default.
+// Never use ForkJoinPool.commonPool() — shared pool saturation causes missed loads.
+private static final Executor LOADER_EXECUTOR = Executors.newVirtualThreadPerTaskExecutor();
+
 @Override
 public V get(K key, Function<K, V> loader) {
     // Fast path: value already in cache
@@ -112,7 +116,7 @@ public V get(K key, Function<K, V> loader) {
             delegate.put(k, value);
             inFlight.remove(k);
             return value;
-        })
+        }, LOADER_EXECUTOR)
     );
 
     try {
@@ -190,7 +194,16 @@ private void maybeRefreshAhead(K key, CacheEntry<V> entry) {
 }
 ```
 
-**`refreshExecutor`:** A dedicated `ScheduledExecutorService` with daemon threads.
+**`refreshExecutor`:** Use `Executors.newVirtualThreadPerTaskExecutor()` for the async
+refresh tasks (passed to `CompletableFuture.supplyAsync()`). For the scheduled threshold
+check, a `ScheduledExecutorService` with a virtual thread factory is appropriate:
+```java
+private final ScheduledExecutorService scheduler =
+    Executors.newSingleThreadScheduledExecutor(
+        Thread.ofVirtual().name("cache-refresh-scheduler").factory()
+    );
+private static final Executor REFRESH_EXECUTOR = Executors.newVirtualThreadPerTaskExecutor();
+```
 Never use `ForkJoinPool.commonPool()` for refresh-ahead — it is shared and can be
 saturated by other application code, causing missed refreshes.
 

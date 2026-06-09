@@ -112,6 +112,8 @@ If Phase N is slower than Phase N-1 on the same workload — stop. Do not procee
 - Thread safety documented on every class: `@ThreadSafe` or `@NotThreadSafe`
 - Every `lock.lock()` has a corresponding `finally { lock.unlock(); }` block
 - No `printStackTrace()` — use SLF4J
+- **Java 21 — virtual threads for background/async work:** Use `Thread.ofVirtual().name("...").factory()` wherever a `ThreadFactory` is needed (scheduled executors, background cleaners). Use `Executors.newVirtualThreadPerTaskExecutor()` for fire-and-forget async tasks. Virtual threads are daemon threads by default — no `setDaemon(true)` required.
+- **Java 21 — `SequencedMap`:** `LinkedHashMap` implements `SequencedMap`. Use `map.firstEntry()` / `map.lastEntry()` instead of iterator workarounds when accessing eldest or newest entries.
 
 ---
 
@@ -131,4 +133,4 @@ Do not skip ahead. Phase N builds on Phase N-1.
 | `/phase-exit-check <N>` | Run full exit gate check before marking a phase done |
 | `/abstraction-check` | Module boundary violations, hot-path allocations, over/under-abstraction |
 | `/benchmark-check [N] [M]` | Compare phase results, detect regressions, verify improvement floors |
-| `/java-best-practices` | Modern Java 17+ usage, VarHandle, records, daemon threads |
+| `/java-best-practices` | Modern Java 21+ usage, VarHandle, records, virtual threads, daemon threads |

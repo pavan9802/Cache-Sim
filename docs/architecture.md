@@ -163,7 +163,7 @@ Four (now five) modules enforce explicit boundaries:
 ### Decision 3: Zero Framework Dependencies in `cache-core`
 
 `cache-core` depends only on:
-- Java 17 standard library
+- Java 21 standard library
 - SLF4J (logging facade only — no implementation; the consumer provides it)
 - JUnit 5 (test scope only)
 
@@ -233,6 +233,24 @@ deadlocks — not an exception that will tell you something went wrong.
 | CountMinSketch counters saturate at 15 | 4-bit counters packed into longs — overflow into adjacent nibble corrupts unrelated counters |
 | Ring buffer size must be a power of two | Required for `index & (size-1)` bitwise-AND indexing |
 | `@Contended` requires `--add-opens` | Without `--add-opens java.base/jdk.internal.vm.annotation=ALL-UNNAMED`, runtime crashes |
+
+---
+
+## JVM Flags Reference
+
+## Java 21 Upgrades
+
+Java 21 (LTS) introduces two features used directly in this project:
+
+**Virtual threads (`Thread.ofVirtual()`)** — background threads (cache cleaners, async loaders,
+feed handler workers) should use virtual threads instead of manually configured daemon platform
+threads. Virtual threads are daemon threads by default and eliminate thread-pool sizing decisions.
+Use `Thread.ofVirtual().name("thread-name").factory()` wherever a `ThreadFactory` is needed.
+For fire-and-forget async tasks, use `Executors.newVirtualThreadPerTaskExecutor()`.
+
+**Sequenced Collections (`SequencedMap`)** — `LinkedHashMap` now implements `SequencedMap`
+(Java 21). Use `map.firstEntry()` and `map.lastEntry()` instead of iterator workarounds when
+you need the eldest or newest entry. This applies to `LRUCache` and `TinyLFUPolicy`.
 
 ---
 

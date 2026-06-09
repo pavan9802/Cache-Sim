@@ -174,6 +174,11 @@ can exist in at most one segment at any time. When moving a key between segments
 remove from the old segment before inserting into the new one to prevent a key being in two
 segments simultaneously.
 
+**`SequencedMap` (Java 21):** `LinkedHashMap` now implements `SequencedMap`. Use
+`map.firstEntry()` to get the LRU tail (eldest entry) instead of `map.entrySet().iterator().next()`
+or a workaround class. Use `map.lastEntry()` for the MRU head. This applies to all three
+segment maps when implementing `selectVictim` and the promote/demote flows.
+
 **`TinyLFUPolicy` is NOT thread-safe.** It will be called from within `TinyLFUCache`'s
 write lock. Do not add synchronization here.
 

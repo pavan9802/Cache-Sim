@@ -15,7 +15,7 @@ so benchmarks have something to compile against.
 
 ## Pre-conditions
 
-None — this is the first phase. Java 17+ and Maven must be installed.
+None — this is the first phase. Java 21+ and Maven must be installed.
 Run `mvn -version` and `java -version` to confirm before starting.
 
 ---

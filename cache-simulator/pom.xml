@@ -38,6 +38,11 @@
       <artifactId>junit-jupiter</artifactId>
       <scope>test</scope>
     </dependency>
+      <!-- Thread-safety annotations -->
+    <dependency>
+     <groupId>net.jcip</groupId>
+    <artifactId>jcip-annotations</artifactId>
+  </dependency>
   </dependencies>
 
 </project>

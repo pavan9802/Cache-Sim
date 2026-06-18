@@ -199,7 +199,7 @@ Map<String, Double> currentPrices    // mutable — updated each tick
 Map<String, Double> volatilities     // per-symbol, default ~0.02 (2%)
 double drift                         // use 0.0 for zero-drift
 double dt                            // 1.0/252 (one trading day)
-AtomicInteger sequenceCounter        // global tick sequence
+int sequenceCounter                  // per-instance tick sequence (not shared)
 ```
 
 **Symbol universe (100 total):**
@@ -222,8 +222,9 @@ Map<String, Double> getCurrentPrices()  // snapshot
 - GBM can theoretically produce negative prices given extreme parameters. Add a floor:
   `Math.max(nextPrice, 0.01)`. This won't happen in practice with realistic parameters
   but prevents divide-by-zero in spread calculations.
-- The `sequenceCounter` is an `AtomicInteger` because multiple threads may call
-  `nextTick()` concurrently from benchmark threads.
+- `sequenceCounter` is a plain `int` — this class is `@NotThreadSafe` and must never be
+  shared across threads. Declare it in a `@State(Scope.Thread)` in benchmarks so each
+  thread gets its own instance.
 
 ---
 
@@ -311,21 +312,28 @@ so all benchmark subclasses start from a consistent, pre-warmed state.
 @Threads(8)
 ```
 
-**`@State(Scope.Benchmark)` fields:**
+**`@State(Scope.Benchmark)` fields** (shared across all threads):
 ```java
 Cache<String, MarketEvent> cache
-MarketDataSimulator simulator
 ZipfianSymbolSelector selector
 Histogram latencyHistogram           // HdrHistogram: max 10s, 3 sig figs
 AtomicLong operationCount
-String[] keyUniverse                 // pre-generated 10,000 keys
+String[] keyUniverse                 // pre-generated 10,000 price bar keys: "SYMBOL:1m:BUCKET"
+                                     // 100 symbols × 100 time buckets, ordered symbol-first
+```
+
+**`@State(Scope.Thread)` fields** (one instance per thread — in a separate state class):
+```java
+MarketDataSimulator simulator        // @NotThreadSafe — must not be shared
 ```
 
 **`@Setup(Level.Trial)`:**
-1. Build cache with `maxSize=10_000`, `ttl=30s`
-2. Pre-populate to 80% capacity (8,000 entries)
-3. Initialize HdrHistogram
-4. Pre-generate `keyUniverse` array
+1. Pre-generate `keyUniverse` — 10,000 price bar identifiers in "SYMBOL:1m:BUCKET" format
+   (100 symbols × 100 1-minute time buckets, ordered symbol-first so keys 0–99 = all AAPL bars)
+2. Initialize `selector` as `ZipfianSymbolSelector(Arrays.asList(keyUniverse), 1.0)` — must come after `keyUniverse` is built
+3. Build cache with `maxSize=10_000`, `ttl=30s`
+4. Pre-populate to 80% capacity (8,000 entries)
+5. Initialize HdrHistogram
 
 **`@TearDown(Level.Trial)`:**
 1. Print HdrHistogram p50/p75/p95/p99/p999
@@ -348,6 +356,10 @@ Uses `Blackhole.consume()` on get result to prevent dead-code elimination.
 **`WriteHeavyBenchmark`:** 50% `get`, 50% `put`. Stresses lock contention.
 
 **`ZipfianBenchmark`:** 95% `get`, 5% `put`. Zipfian key distribution via `selector.select()`.
+`selector` is initialized over all 10,000 price bar keys, making the most-accessed entries the
+earliest time buckets of the most popular symbols. This concentrates reads on a hot subset of bars
+that fits in LRU but not with optimal frequency-based admission, producing the expected 65–75%
+(LRU) vs 80–90% (TinyLFU) hit rate divergence.
 
 **`ThreadScalingBenchmark`:** Read-heavy workload at `@Threads(1)`, `@Threads(2)`,
 `@Threads(4)`, `@Threads(8)`, `@Threads(16)`. Implemented as 5 separate `@Benchmark`

@@ -21,6 +21,18 @@
       <artifactId>slf4j-api</artifactId>
     </dependency>
 
+    <!-- Thread-safety annotations -->
+    <dependency>
+      <groupId>net.jcip</groupId>
+      <artifactId>jcip-annotations</artifactId>
+    </dependency>
+
+    <!-- Latency histogram for StatsReporter -->
+    <dependency>
+      <groupId>org.hdrhistogram</groupId>
+      <artifactId>HdrHistogram</artifactId>
+    </dependency>
+
     <!-- Test scope only -->
     <dependency>
       <groupId>org.junit.jupiter</groupId>

@@ -1,5 +1,6 @@
 # Maven build output
 target/
+dependency-reduced-pom.xml
 
 # JMH benchmark results (large JSON files — committed selectively)
 results/*.json

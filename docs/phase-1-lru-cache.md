@@ -23,61 +23,69 @@ throughput drop vs the stub (3–5M vs 80–100M ops/sec) — that is correct an
 ## Files to Create
 
 ```
-cache-core/src/main/java/com/hpcache/api/CacheStats.java
-cache-core/src/main/java/com/hpcache/api/RemovalCause.java
-cache-core/src/main/java/com/hpcache/api/RemovalListener.java
-cache-core/src/main/java/com/hpcache/internal/entry/CacheEntry.java
-cache-core/src/main/java/com/hpcache/impl/LRUCache.java
-cache-core/src/main/java/com/hpcache/builder/CacheBuilder.java
+✅ cache-core/src/main/java/com/hpcache/api/CacheStats.java
+✅ cache-core/src/main/java/com/hpcache/api/RemovalCause.java
+✅ cache-core/src/main/java/com/hpcache/api/RemovalListener.java
+✅ cache-core/src/main/java/com/hpcache/internal/entry/CacheEntry.java
+✅ cache-core/src/main/java/com/hpcache/impl/LRUCache.java
+⬜ cache-core/src/main/java/com/hpcache/builder/CacheBuilder.java
 
-cache-core/src/test/java/com/hpcache/impl/LRUCacheTest.java
-cache-core/src/test/java/com/hpcache/impl/LRUCacheConcurrencyTest.java
+⬜ cache-core/src/test/java/com/hpcache/impl/LRUCacheTest.java
+⬜ cache-core/src/test/java/com/hpcache/impl/LRUCacheConcurrencyTest.java
 ```
 
 **Update:**
 ```
-cache-core/src/main/java/com/hpcache/api/Cache.java   ← replace placeholder stats() with real CacheStats
+✅ cache-core/src/main/java/com/hpcache/api/Cache.java   ← replace placeholder stats() with real CacheStats
+✅ cache-core/src/main/java/com/hpcache/impl/ConcurrentHashMapCache.java  ← add missing CacheStats import
 ```
 
 ---
 
 ## Implementation Sequence
 
-1. **`CacheStats` record** — no dependencies, pure data
+✅ 1. **`CacheStats` record** — no dependencies, pure data
    → Unit test: `hitRate()` = 0.0 when both counts are 0 (no divide-by-zero)
 
-2. **`RemovalCause` enum + `RemovalListener` interface** — no dependencies
+✅ 2. **`RemovalCause` enum + `RemovalListener` interface** — no dependencies
    → Compile check only
 
-3. **`CacheEntry` record** (in `com.hpcache.internal.entry`)
+✅ 3. **`CacheEntry` record** (in `com.hpcache.internal.entry`)
    → Unit test: `isExpired()` returns false for `noExpiry()`, true after TTL passes
 
-4. **`LRUCache` — basic put/get only** (no TTL, no background cleaner, no stats yet)
+✅ 4. **`LRUCache` — basic put/get only** (no TTL, no background cleaner, no stats yet)
    → Unit test: put 3 items, get all 3, verify null on miss
 
-5. **`LRUCache` — add eviction** (maxSize enforcement via `removeEldestEntry`)
+✅ 5. **`LRUCache` — add eviction** (maxSize enforcement via `removeEldestEntry`)
    → Unit test: fill to maxSize+1, verify size == maxSize, verify LRU entry was evicted
 
-6. **`LRUCache` — add TTL expiry** (per-entry TTL via `CacheEntry.withTtl()`)
+✅ 6. **`LRUCache` — add TTL expiry** (per-entry TTL via `CacheEntry.withTtl()`)
    → Unit test: put with 100ms TTL, sleep 200ms, verify `get()` returns null
 
-7. **`LRUCache` — add background cleaner** (`ScheduledExecutorService` daemon thread)
+✅ 7. **`LRUCache` — add background cleaner** (`ScheduledExecutorService` daemon thread)
    → Unit test: put with 100ms TTL, sleep 2s, verify `size()` decreases (cleaner ran)
 
-8. **`LRUCache` — add stats** (`AtomicLong` hit/miss/eviction counters)
+✅ 8. **`LRUCache` — add stats** (`AtomicLong` hit/miss/eviction counters)
    → Unit test: put 1 item, get it (hit), get missing key (miss), verify `stats().hitRate()`
 
-9. **`LRUCache` — add `RemovalListener`** (fires on size eviction and TTL expiry)
+✅ 9. **`LRUCache` — add `RemovalListener`** (fires on size eviction and TTL expiry)
    → Unit test: register listener, cause eviction, verify listener called with correct `RemovalCause`
 
-10. **`CacheBuilder`** (wraps `LRUCache` construction with validation)
+⬜ 10. **`CacheBuilder`** (wraps `LRUCache` construction with validation)
     → Unit test: `maxSize(0)` throws `IllegalStateException`, `ttl(-1)` throws, etc.
 
-11. **Update `Cache<K,V>`** — replace `Object stats()` with `CacheStats stats()`
+✅ 11. **Update `Cache<K,V>`** — replace `Object stats()` with `CacheStats stats()`
 
-12. **Concurrency tests** — all 4 in `LRUCacheConcurrencyTest`
+⬜ 12. **Concurrency tests** — all 4 in `LRUCacheConcurrencyTest`
 
-13. **Run benchmarks** → `results/phase-1-<timestamp>.json`
+⬜ 13. **Run benchmarks** → `results/phase-1-<timestamp>.json`
+
+### Additional work completed (beyond original sequence)
+
+- `@ThreadSafe` annotation added to `LRUCache` (required by CLAUDE.md)
+- SLF4J warning added to `notifyRemoval` catch block — exceptions no longer silently swallowed
+- Full Javadoc written for all public constructors, public methods, and non-trivial private methods
+- Missing `CacheStats` import fixed in `ConcurrentHashMapCache` (blocked compilation)
 
 ---
 

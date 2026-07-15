@@ -2,9 +2,10 @@ package com.hpcache.impl;
 
 import java.util.concurrent.ConcurrentHashMap;
 
-import net.jcip.annotations.ThreadSafe;
-
 import com.hpcache.api.Cache;
+import com.hpcache.api.CacheStats;
+
+import net.jcip.annotations.ThreadSafe;
 
 @ThreadSafe
 public class ConcurrentHashMapCache<K, V> implements Cache<K, V> {
@@ -47,7 +48,7 @@ public class ConcurrentHashMapCache<K, V> implements Cache<K, V> {
     }
 
     @Override
-    public Object stats() {
+    public CacheStats stats() {
         return null;
     }
 

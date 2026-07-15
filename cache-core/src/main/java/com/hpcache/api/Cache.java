@@ -51,7 +51,7 @@ public interface Cache<K, V> {
      * Returns a snapshot of cache statistics, or {@code null} if stats are not supported
      * (e.g., the stub implementation in Phase 0). Cast to {@code CacheStats} once available.
      */
-    Object stats();
+    CacheStats stats();
 
     /**
      * Releases resources held by this cache (background threads, off-heap memory, etc.).

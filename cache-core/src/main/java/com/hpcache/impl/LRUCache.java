@@ -9,7 +9,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
-import net.jcip.annotations.ThreadSafe;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -19,25 +18,34 @@ import com.hpcache.api.RemovalCause;
 import com.hpcache.api.RemovalListener;
 import com.hpcache.internal.entry.CacheEntry;
 
+import net.jcip.annotations.ThreadSafe;
+
 /**
  * Thread-safe LRU cache with per-entry TTL expiry and size-based eviction.
  *
- * <p>Backed by a {@code LinkedHashMap} in access order with a single
- * {@link ReentrantReadWriteLock} guarding all mutations. Because {@code LinkedHashMap}
- * with {@code accessOrder=true} mutates internal node order on every {@code get()},
- * reads and writes both acquire the <em>write</em> lock. This makes the implementation
+ * <p>
+ * Backed by a {@code LinkedHashMap} in access order with a single
+ * {@link ReentrantReadWriteLock} guarding all mutations. Because
+ * {@code LinkedHashMap}
+ * with {@code accessOrder=true} mutates internal node order on every
+ * {@code get()},
+ * reads and writes both acquire the <em>write</em> lock. This makes the
+ * implementation
  * correct but limits concurrent read throughput; Phase 2 replaces this with a
  * segmented or lock-free strategy.
  *
- * <p>Expired entries are lazily removed on {@link #get} and proactively swept by a
+ * <p>
+ * Expired entries are lazily removed on {@link #get} and proactively swept by a
  * background virtual-thread cleaner that runs every second.
  *
- * <p>This class is {@link ThreadSafe}.
+ * <p>
+ * This class is {@link ThreadSafe}.
  */
 @ThreadSafe
 public class LRUCache<K, V> implements Cache<K, V> {
     private static final Logger log = LoggerFactory.getLogger(LRUCache.class);
-    private final LinkedHashMap<K, CacheEntry<V>> map;   // accessOrder=true
+    private static final long DEFAULT_CLEANUP_INTERVAL_MS = 1000L;
+    private final LinkedHashMap<K, CacheEntry<V>> map; // accessOrder=true
     private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
     private final int maxSize;
     private final long defaultTtlMs;
@@ -46,24 +54,27 @@ public class LRUCache<K, V> implements Cache<K, V> {
     private final AtomicLong hitCount = new AtomicLong();
     private final AtomicLong missCount = new AtomicLong();
     private final AtomicLong evictionCount = new AtomicLong();
+    private final AtomicLong expirationCount = new AtomicLong();
     private final AtomicBoolean closed = new AtomicBoolean(false);
 
     /**
      * Full constructor for testing and dependency injection.
      *
-     * <p>Schedules a fixed-rate expired-entry sweep on {@code cleaner} immediately
-     * after construction. Callers that supply an external executor remain responsible
-     * for its lifecycle, but note that {@link #close()} will call
-     * {@link ScheduledExecutorService#shutdown()} on it.
-     *
-     * @param maxSize         maximum number of entries before LRU eviction; must be &gt; 0
-     * @param defaultTtlMs    TTL applied by {@link #put(Object, Object)} when no per-entry
-     *                        TTL is given; {@code <= 0} means entries never expire
-     * @param removalListener callback fired on eviction, expiry, or explicit removal;
-     *                        {@code null} disables notifications
-     * @param cleaner         executor used for the background expiry sweep
+     * @param maxSize           maximum number of entries before LRU eviction; must
+     *                          be &gt; 0
+     * @param defaultTtlMs      TTL applied by {@link #put(Object, Object)} when no
+     *                          per-entry
+     *                          TTL is given; {@code <= 0} means entries never
+     *                          expire
+     * @param removalListener   callback fired on eviction, expiry, or explicit
+     *                          removal;
+     *                          {@code null} disables notifications
+     * @param cleaner           executor used for the background expiry sweep
+     * @param cleanupIntervalMs how often, in milliseconds, the background sweep
+     *                          runs
      */
-    public LRUCache(int maxSize, long defaultTtlMs, RemovalListener<K, V> removalListener, ScheduledExecutorService cleaner) {
+    public LRUCache(int maxSize, long defaultTtlMs, RemovalListener<K, V> removalListener,
+            ScheduledExecutorService cleaner, long cleanupIntervalMs) {
         this.maxSize = maxSize;
         this.defaultTtlMs = defaultTtlMs;
         this.removalListener = removalListener;
@@ -79,31 +90,61 @@ public class LRUCache<K, V> implements Cache<K, V> {
                 return false;
             }
         };
-        cleaner.scheduleAtFixedRate(this::removeExpiredEntries, 1, 1, TimeUnit.SECONDS);
+        cleaner.scheduleAtFixedRate(this::removeExpiredEntries, cleanupIntervalMs, cleanupIntervalMs,
+                TimeUnit.MILLISECONDS);
     }
 
     /**
-     * Constructs an instance with an owned virtual-thread cleaner.
+     * Constructor with an externally supplied cleaner, defaulting the sweep
+     * interval to
+     * {@value #DEFAULT_CLEANUP_INTERVAL_MS}ms.
+     */
+    public LRUCache(int maxSize, long defaultTtlMs, RemovalListener<K, V> removalListener,
+            ScheduledExecutorService cleaner) {
+        this(maxSize, defaultTtlMs, removalListener, cleaner, DEFAULT_CLEANUP_INTERVAL_MS);
+    }
+
+    /**
+     * Constructs an instance with an owned virtual-thread cleaner running at
+     * {@code cleanupIntervalMs}.
      *
-     * <p>Creates a single-thread {@link ScheduledExecutorService} backed by a virtual
-     * thread named {@code cache-cleaner}. Virtual threads are daemon threads by default,
-     * so this executor will not prevent JVM shutdown.
+     * @param maxSize           maximum number of entries before LRU eviction; must
+     *                          be &gt; 0
+     * @param defaultTtlMs      default TTL in milliseconds; {@code <= 0} means no
+     *                          expiry
+     * @param removalListener   removal callback; {@code null} disables
+     *                          notifications
+     * @param cleanupIntervalMs how often, in milliseconds, the background sweep
+     *                          runs
+     */
+    public LRUCache(int maxSize, long defaultTtlMs, RemovalListener<K, V> removalListener, long cleanupIntervalMs) {
+        this(maxSize, defaultTtlMs, removalListener,
+                Executors.newSingleThreadScheduledExecutor(
+                        Thread.ofVirtual().name("cache-cleaner").factory()),
+                cleanupIntervalMs);
+    }
+
+    /**
+     * Constructs an instance with an owned virtual-thread cleaner running at the
+     * default
+     * {@value #DEFAULT_CLEANUP_INTERVAL_MS}ms interval.
      *
-     * @param maxSize         maximum number of entries before LRU eviction; must be &gt; 0
-     * @param defaultTtlMs    default TTL in milliseconds; {@code <= 0} means no expiry
+     * @param maxSize         maximum number of entries before LRU eviction; must be
+     *                        &gt; 0
+     * @param defaultTtlMs    default TTL in milliseconds; {@code <= 0} means no
+     *                        expiry
      * @param removalListener removal callback; {@code null} disables notifications
      */
     public LRUCache(int maxSize, long defaultTtlMs, RemovalListener<K, V> removalListener) {
-        this(maxSize, defaultTtlMs, removalListener,
-            Executors.newSingleThreadScheduledExecutor(
-                Thread.ofVirtual().name("cache-cleaner").factory()
-            ));
+        this(maxSize, defaultTtlMs, removalListener, DEFAULT_CLEANUP_INTERVAL_MS);
     }
 
     /**
-     * Constructs an instance with no removal listener and an owned virtual-thread cleaner.
+     * Constructs an instance with no removal listener and an owned virtual-thread
+     * cleaner.
      *
-     * @param maxSize      maximum number of entries before LRU eviction; must be &gt; 0
+     * @param maxSize      maximum number of entries before LRU eviction; must be
+     *                     &gt; 0
      * @param defaultTtlMs default TTL in milliseconds; {@code <= 0} means no expiry
      */
     public LRUCache(int maxSize, long defaultTtlMs) {
@@ -111,12 +152,17 @@ public class LRUCache<K, V> implements Cache<K, V> {
     }
 
     /**
-     * Returns the value for {@code key}, or {@code null} on a cache miss or expired entry.
+     * Returns the value for {@code key}, or {@code null} on a cache miss or expired
+     * entry.
      *
-     * <p>Acquires the <em>write</em> lock because {@code LinkedHashMap} with
-     * {@code accessOrder=true} moves the accessed node to the tail of the doubly-linked
-     * list on every call — a structural mutation that is unsafe under concurrent reads.
-     * An expired entry is eagerly removed and counted as both a miss and an eviction.
+     * <p>
+     * Acquires the <em>write</em> lock because {@code LinkedHashMap} with
+     * {@code accessOrder=true} moves the accessed node to the tail of the
+     * doubly-linked
+     * list on every call — a structural mutation that is unsafe under concurrent
+     * reads.
+     * An expired entry is eagerly removed and counted as both a miss and an
+     * expiration.
      *
      * @param key the key to look up; must not be {@code null}
      * @return the cached value, or {@code null} if absent or expired
@@ -132,7 +178,7 @@ public class LRUCache<K, V> implements Cache<K, V> {
             }
             if (entry.isExpired()) {
                 map.remove(key);
-                evictionCount.incrementAndGet();
+                expirationCount.incrementAndGet();
                 missCount.incrementAndGet();
                 notifyRemoval(key, entry.value(), RemovalCause.EXPIRED);
                 return null;
@@ -147,10 +193,12 @@ public class LRUCache<K, V> implements Cache<K, V> {
     /**
      * Associates {@code value} with {@code key} using the cache-wide default TTL.
      *
-     * <p>If {@code defaultTtlMs <= 0} the entry is stored without an expiry.
+     * <p>
+     * If {@code defaultTtlMs <= 0} the entry is stored without an expiry.
      * If a previous mapping existed, the {@link RemovalListener} is notified with
      * {@link RemovalCause#EXPLICIT} for the overwritten value. If adding the entry
-     * causes {@code size > maxSize}, the least-recently-used entry is evicted synchronously
+     * causes {@code size > maxSize}, the least-recently-used entry is evicted
+     * synchronously
      * and the listener is notified with {@link RemovalCause#SIZE}.
      *
      * @param key   the key to associate; must not be {@code null}
@@ -161,8 +209,8 @@ public class LRUCache<K, V> implements Cache<K, V> {
         lock.writeLock().lock();
         try {
             CacheEntry<V> newEntry = defaultTtlMs > 0
-                ? CacheEntry.withTtl(value, defaultTtlMs)
-                : CacheEntry.noExpiry(value);
+                    ? CacheEntry.withTtl(value, defaultTtlMs)
+                    : CacheEntry.noExpiry(value);
             CacheEntry<V> previous = map.put(key, newEntry);
             if (previous != null) {
                 notifyRemoval(key, previous.value(), RemovalCause.EXPLICIT);
@@ -173,16 +221,21 @@ public class LRUCache<K, V> implements Cache<K, V> {
     }
 
     /**
-     * Associates {@code value} with {@code key} and expires the entry after {@code ttlMs}
+     * Associates {@code value} with {@code key} and expires the entry after
+     * {@code ttlMs}
      * milliseconds, overriding the cache-wide default TTL for this entry.
      *
-     * <p>The expiry deadline is computed as {@code System.nanoTime() + ttlMs * 1_000_000}
-     * at the time of this call. If a previous mapping existed, the {@link RemovalListener}
+     * <p>
+     * The expiry deadline is computed as
+     * {@code System.nanoTime() + ttlMs * 1_000_000}
+     * at the time of this call. If a previous mapping existed, the
+     * {@link RemovalListener}
      * is notified with {@link RemovalCause#EXPLICIT} for the overwritten value.
      *
      * @param key   the key to associate; must not be {@code null}
      * @param value the value to store; must not be {@code null}
-     * @param ttlMs time-to-live in milliseconds; {@code <= 0} causes immediate expiry
+     * @param ttlMs time-to-live in milliseconds; {@code <= 0} causes immediate
+     *              expiry
      */
     @Override
     public void put(K key, V value, long ttlMs) {
@@ -198,7 +251,8 @@ public class LRUCache<K, V> implements Cache<K, V> {
     }
 
     /**
-     * Removes the entry for {@code key} if present, notifying the {@link RemovalListener}
+     * Removes the entry for {@code key} if present, notifying the
+     * {@link RemovalListener}
      * with {@link RemovalCause#EXPLICIT}.
      *
      * @param key the key to remove; must not be {@code null}
@@ -219,7 +273,8 @@ public class LRUCache<K, V> implements Cache<K, V> {
     /**
      * Removes all entries from the cache.
      *
-     * <p>If a {@link RemovalListener} is registered, it is called synchronously for
+     * <p>
+     * If a {@link RemovalListener} is registered, it is called synchronously for
      * every entry before the map is cleared. The listener receives
      * {@link RemovalCause#EXPLICIT} for each entry.
      */
@@ -239,10 +294,14 @@ public class LRUCache<K, V> implements Cache<K, V> {
     /**
      * Returns true if the cache contains a live entry for {@code key}.
      *
-     * <p>Trade-off: internally calls {@code map.get()}, which promotes the entry to
-     * most-recently-used in the LRU order. A pure existence check cannot retrieve the
-     * {@link CacheEntry} for expiry inspection without this side effect — {@code LinkedHashMap}
-     * has no peek API. Callers on hot paths where LRU promotion is undesirable should use
+     * <p>
+     * Trade-off: internally calls {@code map.get()}, which promotes the entry to
+     * most-recently-used in the LRU order. A pure existence check cannot retrieve
+     * the
+     * {@link CacheEntry} for expiry inspection without this side effect —
+     * {@code LinkedHashMap}
+     * has no peek API. Callers on hot paths where LRU promotion is undesirable
+     * should use
      * {@link #get} instead and handle the null return.
      */
     @Override
@@ -257,10 +316,12 @@ public class LRUCache<K, V> implements Cache<K, V> {
     }
 
     /**
-     * Returns the number of entries currently in the cache, including entries that may
+     * Returns the number of entries currently in the cache, including entries that
+     * may
      * be expired but not yet swept by the background cleaner.
      *
-     * <p>Acquires the read lock. Unlike {@link #get}, {@code size()} does not mutate
+     * <p>
+     * Acquires the read lock. Unlike {@link #get}, {@code size()} does not mutate
      * the map's access order, so a read lock is sufficient here.
      *
      * @return current entry count; never negative
@@ -278,8 +339,10 @@ public class LRUCache<K, V> implements Cache<K, V> {
     /**
      * Returns an immutable snapshot of cache statistics at the time of this call.
      *
-     * <p>Counters are read from {@link AtomicLong} fields without acquiring a lock,
-     * so the snapshot is weakly consistent — individual counters are always accurate,
+     * <p>
+     * Counters are read from {@link AtomicLong} fields without acquiring a lock,
+     * so the snapshot is weakly consistent — individual counters are always
+     * accurate,
      * but they may not reflect a single atomic instant under concurrent access.
      * {@code loadCount} and {@code totalLoadTimeNanos} are always zero in Phase 1
      * (no read-through loading is supported yet).
@@ -289,21 +352,24 @@ public class LRUCache<K, V> implements Cache<K, V> {
     @Override
     public CacheStats stats() {
         return new CacheStats(
-            hitCount.get(),
-            missCount.get(),
-            evictionCount.get(),
-            0L,
-            0L,
-            System.currentTimeMillis()
-        );
+                hitCount.get(),
+                missCount.get(),
+                evictionCount.get(),
+                expirationCount.get(),
+                0L,
+                0L,
+                System.currentTimeMillis());
     }
 
     /**
      * Shuts down the background expiry cleaner and marks this cache as closed.
      *
-     * <p>Idempotent — safe to call multiple times. Any in-flight cleaner sweep is
-     * allowed to finish gracefully ({@link ScheduledExecutorService#shutdown()} does not
-     * interrupt running tasks). Cache operations after {@code close()} are not defined.
+     * <p>
+     * Idempotent — safe to call multiple times. Any in-flight cleaner sweep is
+     * allowed to finish gracefully ({@link ScheduledExecutorService#shutdown()}
+     * does not
+     * interrupt running tasks). Cache operations after {@code close()} are not
+     * defined.
      */
     @Override
     public void close() {
@@ -313,10 +379,14 @@ public class LRUCache<K, V> implements Cache<K, V> {
     }
 
     /**
-     * Delivers a removal notification to the {@link RemovalListener}, if one is registered.
+     * Delivers a removal notification to the {@link RemovalListener}, if one is
+     * registered.
      *
-     * <p>Must be called while holding the write lock. Any exception thrown by the listener
-     * is caught and logged — it must not propagate, as doing so would corrupt the lock state
+     * <p>
+     * Must be called while holding the write lock. Any exception thrown by the
+     * listener
+     * is caught and logged — it must not propagate, as doing so would corrupt the
+     * lock state
      * of the caller.
      *
      * @param key   the key being removed
@@ -336,10 +406,15 @@ public class LRUCache<K, V> implements Cache<K, V> {
     /**
      * Scans all entries and removes those whose TTL has elapsed.
      *
-     * <p>Called by the background cleaner on a fixed 1-second interval. Acquires the
-     * write lock for the duration of the scan to ensure the {@code removeIf} iteration
-     * is isolated from concurrent {@link #put} and {@link #get} operations. Each removed
-     * entry increments {@code evictionCount} and fires the {@link RemovalListener} with
+     * <p>
+     * Called by the background cleaner on a fixed 1-second interval. Acquires the
+     * write lock for the duration of the scan to ensure the {@code removeIf}
+     * iteration
+     * is isolated from concurrent {@link #put} and {@link #get} operations. Each
+     * removed
+     * entry increments {@code expirationCount} and fires the
+     * {@link RemovalListener}
+     * with
      * {@link RemovalCause#EXPIRED}.
      */
     private void removeExpiredEntries() {
@@ -347,7 +422,7 @@ public class LRUCache<K, V> implements Cache<K, V> {
         try {
             map.entrySet().removeIf(entry -> {
                 if (entry.getValue().isExpired()) {
-                    evictionCount.incrementAndGet();
+                    expirationCount.incrementAndGet();
                     notifyRemoval(entry.getKey(), entry.getValue().value(), RemovalCause.EXPIRED);
                     return true;
                 }

@@ -28,10 +28,10 @@ throughput drop vs the stub (3–5M vs 80–100M ops/sec) — that is correct an
 ✅ cache-core/src/main/java/com/hpcache/api/RemovalListener.java
 ✅ cache-core/src/main/java/com/hpcache/internal/entry/CacheEntry.java
 ✅ cache-core/src/main/java/com/hpcache/impl/LRUCache.java
-⬜ cache-core/src/main/java/com/hpcache/builder/CacheBuilder.java
+✅ cache-core/src/main/java/com/hpcache/impl/CacheBuilder.java  ← moved to impl (not builder) so LRUCache constructors can be package-private
 
-⬜ cache-core/src/test/java/com/hpcache/impl/LRUCacheTest.java
-⬜ cache-core/src/test/java/com/hpcache/impl/LRUCacheConcurrencyTest.java
+✅ cache-core/src/test/java/com/hpcache/impl/LRUCacheTest.java
+✅ cache-core/src/test/java/com/hpcache/impl/LRUCacheConcurrencyTest.java
 ```
 
 **Update:**
@@ -71,14 +71,14 @@ throughput drop vs the stub (3–5M vs 80–100M ops/sec) — that is correct an
 ✅ 9. **`LRUCache` — add `RemovalListener`** (fires on size eviction and TTL expiry)
    → Unit test: register listener, cause eviction, verify listener called with correct `RemovalCause`
 
-⬜ 10. **`CacheBuilder`** (wraps `LRUCache` construction with validation)
+✅ 10. **`CacheBuilder`** (wraps `LRUCache` construction with validation)
     → Unit test: `maxSize(0)` throws `IllegalStateException`, `ttl(-1)` throws, etc.
 
 ✅ 11. **Update `Cache<K,V>`** — replace `Object stats()` with `CacheStats stats()`
 
-⬜ 12. **Concurrency tests** — all 4 in `LRUCacheConcurrencyTest`
+✅ 12. **Concurrency tests** — all 4 in `LRUCacheConcurrencyTest`
 
-⬜ 13. **Run benchmarks** → `results/phase-1-<timestamp>.json`
+✅ 13. **Run benchmarks** → `results/phase-1-<timestamp>.json`
 
 ### Additional work completed (beyond original sequence)
 
@@ -86,6 +86,13 @@ throughput drop vs the stub (3–5M vs 80–100M ops/sec) — that is correct an
 - SLF4J warning added to `notifyRemoval` catch block — exceptions no longer silently swallowed
 - Full Javadoc written for all public constructors, public methods, and non-trivial private methods
 - Missing `CacheStats` import fixed in `ConcurrentHashMapCache` (blocked compilation)
+- `LRUCache` constructors made package-private; `CacheBuilder` moved to `com.hpcache.impl`
+  so direct instantiation bypassing builder validation is impossible from outside the package
+- `rejectNullKey()` added; `put()` and `get()` both throw `NullPointerException("key must not be null")`
+  on null keys — contract pinned and tested in `LRUCacheTest.nullKeyThrowNPE`
+- `WriteLockStressTest` pom fixed (missing `<annotationProcessorPaths>` for jcstress 0.16);
+  test redesigned with static `CACHE` field to avoid per-instance `ScheduledExecutorService`
+  OOM under jcstress stride allocation — 34/34 runs pass, zero FORBIDDEN outcomes
 
 ---
 
@@ -407,20 +414,20 @@ After step 13, run `ReadHeavyBenchmark` with `LRUCache`:
 ## Exit Gate
 
 ### Correctness
-- [ ] All unit tests in `LRUCacheTest` pass, zero failures across `@RepeatedTest(10)`
-- [ ] All concurrency tests pass per the table above (50/100 repetitions, jcstress clean)
-- [ ] jcstress `WriteLockStressTest`: zero forbidden outcomes
+- [x] All unit tests in `LRUCacheTest` pass, zero failures across `@RepeatedTest(10)`
+- [x] All concurrency tests pass per the table above (50/100 repetitions, jcstress clean)
+- [x] jcstress `WriteLockStressTest`: zero forbidden outcomes (34/34 pass)
 - [ ] Suite re-run 3 times: identical results each time
 
 ### Performance
-- [ ] Benchmark baseline recorded to `results/phase-1-<timestamp>.json`
-- [ ] No benchmark errors or NaN
-- [ ] Throughput is in the 1–10M ops/sec range (confirms LRU overhead is present)
+- [x] Benchmark baseline recorded to `results/phase-1-<timestamp>.json`
+- [x] No benchmark errors or NaN
+- [x] Throughput is in the 1–10M ops/sec range (confirms LRU overhead is present)
 
 ### Code Quality
-- [ ] `/concurrency-review` on all Phase 1 files: zero findings
-- [ ] `/java-best-practices` on all Phase 1 files: zero MUST FIX findings
-- [ ] `/abstraction-check`: zero MUST FIX findings
+- [x] `/concurrency-review` on all Phase 1 files: zero findings
+- [x] `/java-best-practices` on all Phase 1 files: zero MUST FIX findings
+- [x] `/abstraction-check`: zero MUST FIX findings
 
 ---
 

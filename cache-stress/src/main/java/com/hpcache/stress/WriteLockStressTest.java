@@ -6,39 +6,31 @@ import org.openjdk.jcstress.annotations.Expect;
 import org.openjdk.jcstress.annotations.JCStressTest;
 import org.openjdk.jcstress.annotations.Outcome;
 import org.openjdk.jcstress.annotations.State;
-import org.openjdk.jcstress.infra.results.I_Result;
+import org.openjdk.jcstress.infra.results.II_Result;
 
-import com.hpcache.impl.LRUCache;
+import com.hpcache.api.Cache;
+import com.hpcache.impl.CacheBuilder;
 
 @JCStressTest
-@Outcome(id = "1", expect = Expect.ACCEPTABLE,
-    desc = "The single entry survives concurrent get() calls uncorrupted.")
+@Outcome(id = "1, 0", expect = Expect.ACCEPTABLE,  desc = "entry survives concurrent reads")
+@Outcome(              expect = Expect.FORBIDDEN,   desc = "data corruption — entry lost or duplicated")
 @State
 public class WriteLockStressTest {
-    // jcstress creates many State instances per run with no teardown hook; LRUCache's
-    // constructor unconditionally starts a background cleaner thread with a perpetual
-    // scheduled task, so a fresh instance per trial leaks a thread per instantiation
-    // and exhausts the forked JVM's heap. Sharing one cache across all trials keeps
-    // exactly one cleaner alive for the whole fork while still exercising the same
-    // get() write-lock path under concurrent contention.
-    private static final LRUCache<String, Integer> cache = new LRUCache<>(100, -1);
 
+    // Static: jcstress pre-allocates O(stride × tests) @State instances per fork.
+    // Creating a ScheduledExecutorService per instance OOMs the forked JVM.
+    // This test intentionally exercises concurrent access to the *same* cache, so
+    // a single shared instance is both correct and necessary.
+    private static final Cache<String, Integer> CACHE;
     static {
-        cache.put("key", 1);
+        CACHE = CacheBuilder.<String, Integer>newBuilder().maxSize(100).build();
+        CACHE.put("key", 1);
     }
 
-    @Actor
-    public void actor1() {
-        cache.get("key");
-    }
+    @Actor public void actor1() { CACHE.get("key"); }
+    @Actor public void actor2() { CACHE.get("key"); }
 
-    @Actor
-    public void actor2() {
-        cache.get("key");
-    }
-
-    @Arbiter
-    public void arbiter(I_Result r) {
-        r.r1 = cache.size();
+    @Arbiter public void arbiter(II_Result r) {
+        r.r1 = CACHE.size();  // must always be 1
     }
 }

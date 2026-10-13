@@ -7,7 +7,7 @@ import org.openjdk.jmh.infra.Blackhole;
 
 import com.hpcache.sim.MarketDataSimulator;
 
-public class ReadHeavyBenchmark extends BenchmarkBase {
+public class ReadHeavyBenchmark extends Phase1BenchmarkBase {
     
     @Benchmark
     public void readHeavy(Blackhole bh, ThreadState ts) {

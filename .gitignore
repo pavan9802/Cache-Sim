@@ -1,6 +1,5 @@
 # Maven build output
 target/
-dependency-reduced-pom.xml
 
 # JMH benchmark results (large JSON files — committed selectively)
 results/*.json
@@ -34,5 +33,15 @@ gc-*.log
 # Keep the results directory itself
 !results/.gitkeep
 
-# jcstress HTML report output (generated when stress tests are run)
+# jcstress output — binary result blobs and HTML reports
 jcstress-results/
+jcstress-results-*.bin.gz
+results/*.html
+results/*.html.gz
+
+# Maven Shade plugin leaves a dependency-reduced-pom.xml next to the module pom
+dependency-reduced-pom.xml
+
+# META-INF extracted from jars into the repo root (e.g. unzip -p ... META-INF/TestList)
+META-INF/
+

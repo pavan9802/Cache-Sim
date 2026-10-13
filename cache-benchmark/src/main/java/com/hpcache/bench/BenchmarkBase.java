@@ -49,7 +49,7 @@ public class BenchmarkBase {
 
     private static final Logger log = LoggerFactory.getLogger(BenchmarkBase.class);
     private static final int KEY_UNIVERSE_SIZE = 10_000;
-    private static final int INITIAL_CACHE_SIZE = (int) (KEY_UNIVERSE_SIZE * 0.8);
+    protected static final int INITIAL_CACHE_SIZE = (int) (KEY_UNIVERSE_SIZE * 0.8);
 
     protected Cache<String, MarketEvent> cache;
     protected ZipfianSymbolSelector selector;
@@ -73,7 +73,7 @@ public class BenchmarkBase {
         cache.close();
     }
 
-    private Cache<String, MarketEvent> buildCache() {
+    protected Cache<String, MarketEvent> buildCache() {
         var c = new ConcurrentHashMapCache<String, MarketEvent>();
         MarketEvent seed = new MarketEvent("SEED", 99.99, 100.01, 0L, System.nanoTime(), 0);
         for (int i = 0; i < INITIAL_CACHE_SIZE; i++) {
@@ -81,6 +81,9 @@ public class BenchmarkBase {
         }
         return c;
     }
+
+    /** Phase tag used in result filenames and JSON. Override in each phase subclass. */
+    protected String phaseTag() { return "phase-0"; }
 
     private void printHistogram() {
         System.out.printf("Latency (ns):%n");
@@ -101,10 +104,10 @@ public class BenchmarkBase {
             Files.createDirectories(resultsDir);
             String timestamp = LocalDateTime.now()
                 .format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"));
-            Path file = resultsDir.resolve("phase-0-" + getClass().getSimpleName() + "-" + timestamp + ".json");
+            Path file = resultsDir.resolve(phaseTag() + "-" + getClass().getSimpleName() + "-" + timestamp + ".json");
             String json = """
                 {
-                  "phase": 0,
+                  "phase": "%s",
                   "timestamp": "%s",
                   "latencyNs": {
                     "p50":  %d,
@@ -116,6 +119,7 @@ public class BenchmarkBase {
                   "totalOperations": %d
                 }
                 """.formatted(
+                    phaseTag(),
                     timestamp,
                     latencyHistogram.getValueAtPercentile(50),
                     latencyHistogram.getValueAtPercentile(75),

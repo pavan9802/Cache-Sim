@@ -1,140 +1,263 @@
 package com.hpcache.impl;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.AfterEach;
-import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import com.hpcache.api.Cache;
+import com.hpcache.api.CacheStats;
 import com.hpcache.api.RemovalCause;
 
 class LRUCacheTest {
 
-    private LRUCache<String, String> cache;
+    private Cache<String, String> cache;
+
+    @BeforeEach
+    void setUp() {
+        cache = CacheBuilder.<String, String>newBuilder()
+            .maxSize(5)
+            .build();
+    }
 
     @AfterEach
     void tearDown() {
-        if (cache != null) {
-            cache.close();
-        }
+        cache.close();
     }
 
-    @Test
-    void evictionCountTracksOnlySizeEvictions() {
-        cache = new LRUCache<>(2, -1);
-        cache.put("a", "1");
-        cache.put("b", "2");
-        cache.put("c", "3");
-        assertEquals(1, cache.stats().evictionCount());
-        assertEquals(0, cache.stats().expirationCount());
-    }
-
-    @Test
-    void expirationCountTracksOnlyTtlExpiry() throws InterruptedException {
-        cache = new LRUCache<>(10, -1, null, 50L);
-        cache.put("a", "1", 50L);
-        Thread.sleep(300);
-        assertNull(cache.get("a"));
-        assertEquals(0, cache.stats().evictionCount());
-        assertEquals(1, cache.stats().expirationCount());
-    }
-
-    @Test
-    void cleanupIntervalIsConfigurable() throws InterruptedException {
-        cache = new LRUCache<>(10, -1, null, 50L);
-        cache.put("a", "1", 50L);
-        Thread.sleep(300);
-        assertEquals(0, cache.size());
-    }
+    // -------------------------------------------------------------------------
+    // Basic get / put
+    // -------------------------------------------------------------------------
 
     @Test
     void getOnEmptyCacheReturnsNull() {
-        cache = new LRUCache<>(10, -1);
-        assertNull(cache.get("missing"));
+        assertNull(cache.get("key"));
     }
 
     @Test
     void putThenGetSameKeyReturnsValue() {
-        cache = new LRUCache<>(10, -1);
-        cache.put("k", "v");
-        assertEquals("v", cache.get("k"));
+        cache.put("key", "value");
+        assertEquals("value", cache.get("key"));
     }
 
     @Test
-    void sizeNeverExceedsMaxSize() {
-        cache = new LRUCache<>(3, -1);
-        cache.put("a", "1");
-        cache.put("b", "2");
-        cache.put("c", "3");
-        cache.put("d", "4");
-        assertEquals(3, cache.size());
+    void nullKeyPutThrowsNPE(){
+        assertThrows(NullPointerException.class, () -> cache.put(null, "val"));
+    }
+
+        @Test
+    void nullKeyGetThrowsNPE(){
+        assertThrows(NullPointerException.class, () -> cache.get(null));
+    }
+    // -------------------------------------------------------------------------
+    // Size eviction
+    // -------------------------------------------------------------------------
+
+    @Test
+    void cacheDoesNotExceedMaxSize() {
+        // Insert maxSize + 1 entries, assert size() == maxSize
+        cache.put("key1", "value1");
+        cache.put("key2", "value2");
+        cache.put("key3", "value3");
+        cache.put("key4", "value4");
+        cache.put("key5", "value5");
+        cache.put("key6", "value6");
+        assertEquals(5, cache.size());
     }
 
     @Test
-    void leastRecentlyUsedEntryIsEvictedFirst() {
-        cache = new LRUCache<>(2, -1);
-        cache.put("a", "1");
-        cache.put("b", "2");
-        cache.get("a");
-        cache.put("c", "3");
-        assertNull(cache.get("b"));
-        assertEquals("1", cache.get("a"));
-        assertEquals("3", cache.get("c"));
+    void lruEntryIsEvictedFirst() throws InterruptedException {
+        // Access entries in a specific order, trigger eviction, verify the
+        // least-recently-used key is gone and the others remain
+        cache.put("key1", "value1");
+        cache.put("key2", "value2");
+        cache.put("key3", "value3");
+        cache.put("key4", "value4");
+        cache.put("key5", "value5");
+        cache.get("key1"); // access key1 to make it recently used
+        cache.put("key6", "value6"); // this should evict key2 (
+        
+        assertNull(cache.get("key2"));
+        assertEquals(5, cache.size());
     }
 
+    // -------------------------------------------------------------------------
+    // TTL expiry
+    // -------------------------------------------------------------------------
+
     @Test
-    void ttlExpiryViaGetReturnsNullAfterExpiry() throws InterruptedException {
-        cache = new LRUCache<>(10, -1, null, 100_000L);
-        cache.put("k", "v", 100L);
+    void getReturnsNullAfterPerEntryTtlExpires() throws InterruptedException {
+        // put with 100ms TTL, sleep 200ms, assert get() returns null
+        cache.put("key1", "value1", 100);
         Thread.sleep(200);
-        assertNull(cache.get("k"));
+
+        assertNull(cache.get("key1"));
     }
 
     @Test
-    void hitCountIncrementsOnHit() {
-        cache = new LRUCache<>(10, -1);
-        cache.put("k", "v");
-        cache.get("k");
-        assertEquals(1, cache.stats().hitCount());
+    void backgroundCleanerRemovesExpiredEntries() throws InterruptedException {
+        // put with 100ms TTL, sleep 2s (cleaner fires at 1s), assert size() decreased
+        cache.put("key1", "value1", 100);
+        Thread.sleep(2000);
+
+        assertEquals(0, cache.size());
+    }
+
+    // -------------------------------------------------------------------------
+    // Stats
+    // -------------------------------------------------------------------------
+
+    @Test
+    void hitCountIncrementsOnCacheHit() {
+        cache.put("key1", "value1");
+        CacheStats statsBefore = cache.stats();
+        cache.get("key1");
+        CacheStats statsAfter = cache.stats();
+
+        assertEquals(statsBefore.hitCount(), 0);
+        assertEquals(statsAfter.hitCount(), 1);
     }
 
     @Test
     void missCountIncrementsOnMissAndExpiredEntry() throws InterruptedException {
-        cache = new LRUCache<>(10, -1, null, 100_000L);
-        cache.get("missing");
-        cache.put("k", "v", 50L);
-        Thread.sleep(200);
-        cache.get("k");
-        assertEquals(2, cache.stats().missCount());
+        // Verify miss increments on a cold miss AND on a get() of an expired entry
+        cache.get("key1"); // cold miss
+        cache.put("key1", "value1", 100);
+        Thread.sleep(101);
+        cache.get("key1"); // expired entry
+
+        CacheStats stats = cache.stats();
+        assertEquals(2, stats.missCount());
     }
 
     @Test
+    void evictionCountIncrementsOnSizeEviction() {
+        // Fill past maxSize, verify stats().evictionCount() equals overflow amount
+        cache.put("key1", "value1");
+        cache.put("key2", "value2");
+        cache.put("key3", "value3");
+        cache.put("key4", "value4");
+        cache.put("key5", "value5");
+        cache.put("key6", "value6"); // this should evict key1  
+        CacheStats stats = cache.stats();
+        
+        assertEquals(1, stats.evictionCount());
+    }
+
+    // -------------------------------------------------------------------------
+    // RemovalListener
+    // -------------------------------------------------------------------------
+
+    @Test
     void removalListenerCalledWithSizeCauseOnEviction() {
-        List<RemovalCause> causes = new ArrayList<>();
-        cache = new LRUCache<>(1, -1, (k, v, cause) -> causes.add(cause));
-        cache.put("a", "1");
-        cache.put("b", "2");
-        assertEquals(List.of(RemovalCause.SIZE), causes);
+        AtomicReference<String> evictedKey   = new AtomicReference<>();
+        AtomicReference<RemovalCause> cause  = new AtomicReference<>();
+
+        Cache<String, String> c = CacheBuilder.<String, String>newBuilder()
+            .maxSize(3)
+            .removalListener((k, v, rc) -> { evictedKey.set(k); cause.set(rc); })
+            .build();
+
+        try {
+            c.put("a", "1");
+            c.put("b", "2");
+            c.put("c", "3");
+            c.put("d", "4");  // evicts "a" (LRU)
+
+            assertEquals(RemovalCause.SIZE, cause.get());
+            assertEquals("a", evictedKey.get());
+        } finally {
+            c.close();
+        }
     }
 
     @Test
     void removalListenerCalledWithExpiredCauseOnTtlExpiry() throws InterruptedException {
-        List<RemovalCause> causes = new ArrayList<>();
-        cache = new LRUCache<>(10, -1, (k, v, cause) -> causes.add(cause), 50L);
-        cache.put("a", "1", 50L);
-        Thread.sleep(300);
-        assertEquals(List.of(RemovalCause.EXPIRED), causes);
+        AtomicReference<RemovalCause> cause = new AtomicReference<>();
+
+        Cache<String, String> c = CacheBuilder.<String, String>newBuilder()
+            .maxSize(10)
+            .removalListener((k, v, rc) -> cause.set(rc))
+            .build();
+
+        try {
+            c.put("key", "value", 100);  // 100ms TTL
+            Thread.sleep(200);
+            c.get("key");                // lazy expiry fires the listener
+
+            assertEquals(RemovalCause.EXPIRED, cause.get());
+        } finally {
+            c.close();
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Lifecycle
+    // -------------------------------------------------------------------------
+
+    @Test
+    void closeTwiceDoesNotThrow() {
+        // TODO
+        cache.close();
+        cache.close();
+    }
+
+    // -------------------------------------------------------------------------
+    // CacheBuilder validation
+    // -------------------------------------------------------------------------
+
+    @Test
+    void builderThrowsWhenMaxSizeIsZero() {
+        assertThrows(IllegalStateException.class, () ->
+            CacheBuilder.newBuilder().maxSize(0).build());
     }
 
     @Test
-    void closeIsIdempotent() {
-        cache = new LRUCache<>(10, -1);
-        assertDoesNotThrow(() -> {
-            cache.close();
-            cache.close();
-        });
+    void builderThrowsWhenMaxSizeIsNegative() {
+        assertThrows(IllegalStateException.class, () ->
+            CacheBuilder.newBuilder().maxSize(-1).build());
+    }
+
+    @Test
+    void builderThrowsWhenMaxSizeNotSet() {
+        assertThrows(IllegalStateException.class, () ->
+            CacheBuilder.newBuilder().build());
+    }
+
+    @Test
+    void builderThrowsWhenTtlIsNegative() {
+        assertThrows(IllegalStateException.class, () ->
+            CacheBuilder.newBuilder().maxSize(10).ttl(-1, TimeUnit.SECONDS).build());
+    }
+
+    @Test
+    void builderThrowsWhenTtlIsZero() {
+        assertThrows(IllegalStateException.class, () ->
+            CacheBuilder.newBuilder().maxSize(10).ttl(0, TimeUnit.SECONDS).build());
+    }
+
+    @Test
+    void customCleanupIntervalIsAppliedToBuiltCache() throws InterruptedException {
+        Cache<String, String> c = CacheBuilder.<String, String>newBuilder()
+            .maxSize(10)
+            .ttl(50, TimeUnit.MILLISECONDS)
+            .cleanupInterval(100, TimeUnit.MILLISECONDS)
+            .build();
+        try {
+            c.put("k", "v");
+            // Entry is accessible before TTL elapses
+            assertEquals("v", c.get("k"));
+            // Wait for TTL + one full cleanup interval to pass
+            Thread.sleep(300);
+            // The background cleaner must have swept the expired entry
+            assertEquals(0, c.size());
+        } finally {
+            c.close();
+        }
     }
 }

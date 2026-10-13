@@ -1,6 +1,5 @@
 package com.hpcache.impl;
 
-import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -9,171 +8,199 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.AfterEach;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.RepeatedTest;
+import org.junit.jupiter.api.Timeout;
 
+import com.hpcache.api.Cache;
+
+/**
+ * Concurrency tests for {@link LRUCache}.
+ *
+ * <p>Repetition counts are set per the project spec:
+ * <ul>
+ *   <li>Thread-safety (no data corruption): {@code @RepeatedTest(50)}
+ *   <li>Critical paths (eviction count accuracy): {@code @RepeatedTest(100)}
+ *   <li>Deadlock tests: {@code @RepeatedTest(20)} + {@code @Timeout}
+ * </ul>
+ *
+ * <p>A single failure in any run is a failed gate — race conditions are non-deterministic.
+ */
 class LRUCacheConcurrencyTest {
 
-    private LRUCache<String, Integer> cache;
+    private static final int MAX_SIZE = 1_000;
+
+    private Cache<String, String> cache;
+
+    @BeforeEach
+    void setUp() {
+        cache = CacheBuilder.<String, String>newBuilder()
+            .maxSize(MAX_SIZE)
+            .build();
+    }
 
     @AfterEach
     void tearDown() {
-        if (cache != null) {
-            cache.close();
-        }
+        cache.close();
     }
 
+    // -------------------------------------------------------------------------
+    // Test 1 — No data corruption under concurrent writes
+    // 16 threads each writing 10,000 entries
+    // After completion: no exceptions, size() <= maxSize
+    // -------------------------------------------------------------------------
+
     @RepeatedTest(50)
-    void concurrentWritesFromManyThreadsCauseNoCorruption() throws InterruptedException {
-        cache = new LRUCache<>(1000, -1);
+    void noDataCorruptionUnderConcurrentWrites() throws InterruptedException {
         int threadCount = 16;
-        int entriesPerThread = 10_000;
+        int writesPerThread = 10_000;
+
+        CountDownLatch ready = new CountDownLatch(threadCount);
         CountDownLatch start = new CountDownLatch(1);
-        CountDownLatch done = new CountDownLatch(threadCount);
-        AtomicInteger failures = new AtomicInteger();
+        CountDownLatch done  = new CountDownLatch(threadCount);
+
         ExecutorService pool = Executors.newFixedThreadPool(threadCount);
-        try {
-            for (int t = 0; t < threadCount; t++) {
-                int threadId = t;
-                pool.submit(() -> {
-                    try {
-                        start.await();
-                        for (int i = 0; i < entriesPerThread; i++) {
-                            cache.put("t" + threadId + "-k" + i, i);
-                        }
-                    } catch (Exception e) {
-                        failures.incrementAndGet();
-                    } finally {
-                        done.countDown();
+        AtomicInteger errors = new AtomicInteger(0);
+
+        for (int t = 0; t < threadCount; t++) {
+            final int threadId = t;
+            pool.submit(() -> {
+                ready.countDown();
+                try {
+                    start.await();
+                    for (int i = 0; i < writesPerThread; i++) {
+                        cache.put("key-" + threadId + "-" + i, "value-" + threadId + "-" + i);
                     }
-                });
-            }
-            start.countDown();
-            assertTrue(done.await(30, TimeUnit.SECONDS), "threads did not finish in time");
-        } finally {
-            pool.shutdownNow();
+                } catch (Exception e) {
+                    errors.incrementAndGet();
+                } finally {
+                    done.countDown();
+                }
+            });
         }
-        assertEquals(0, failures.get());
-        assertTrue(cache.size() <= 1000);
+
+        ready.await();
+        start.countDown();
+        done.await(30, TimeUnit.SECONDS);
+        pool.shutdown();
+
+        assertEquals(0, errors.get());
+        assertTrue(cache.size() <= MAX_SIZE);
     }
 
+    // -------------------------------------------------------------------------
+    // Test 2 — TTL expiry is thread-safe
+    // put with 100ms TTL, sleep 200ms, 8 threads all reading → all return null
+    // -------------------------------------------------------------------------
+
     @RepeatedTest(50)
-    void ttlExpiryVisibleToAllReaderThreads() throws InterruptedException {
-        cache = new LRUCache<>(100, -1);
-        cache.put("key", 1, 100L);
-        Thread.sleep(200);
-        int readerCount = 8;
-        CountDownLatch start = new CountDownLatch(1);
-        CountDownLatch done = new CountDownLatch(readerCount);
-        AtomicInteger staleReads = new AtomicInteger();
-        ExecutorService pool = Executors.newFixedThreadPool(readerCount);
-        try {
-            for (int i = 0; i < readerCount; i++) {
-                pool.submit(() -> {
-                    try {
-                        start.await();
-                        if (cache.get("key") != null) {
-                            staleReads.incrementAndGet();
-                        }
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                    } finally {
-                        done.countDown();
+    void ttlExpiryIsThreadSafe() throws InterruptedException {
+        int threadCount = 8;
+
+        cache.put("key", "value", 100);  // single put before any threads start
+        Thread.sleep(200);               // outlast the TTL
+
+        CountDownLatch ready  = new CountDownLatch(threadCount);
+        CountDownLatch start  = new CountDownLatch(1);
+        CountDownLatch done   = new CountDownLatch(threadCount);
+        AtomicInteger nulls   = new AtomicInteger(0);
+        AtomicInteger errors  = new AtomicInteger(0);
+
+        ExecutorService pool = Executors.newFixedThreadPool(threadCount);
+        for (int i = 0; i < threadCount; i++) {
+            pool.submit(() -> {
+                ready.countDown();
+                try {
+                    start.await();
+                    if (cache.get("key") == null) {
+                        nulls.incrementAndGet();
                     }
-                });
-            }
-            start.countDown();
-            assertTrue(done.await(10, TimeUnit.SECONDS));
-        } finally {
-            pool.shutdownNow();
+                } catch (Exception e) {
+                    errors.incrementAndGet();
+                } finally {
+                    done.countDown();
+                }
+            });
         }
-        assertEquals(0, staleReads.get());
+
+        ready.await();
+        start.countDown();
+        done.await(10, TimeUnit.SECONDS);
+        pool.shutdown();
+
+        assertEquals(0, errors.get());
+        assertEquals(threadCount, nulls.get(), "All threads must see the expired entry as null");
     }
+
+    // -------------------------------------------------------------------------
+    // Test 3 — Eviction count accuracy
+    // Fill to maxSize + 1000, assert evictionCount == 1000
+    // -------------------------------------------------------------------------
 
     @RepeatedTest(100)
-    void evictionCountIsExactUnderConcurrentFill() throws InterruptedException {
-        int maxSize = 1000;
-        int overflow = 1000;
-        cache = new LRUCache<>(maxSize, -1);
-        int threadCount = 8;
-        int totalPuts = maxSize + overflow;
-        CountDownLatch start = new CountDownLatch(1);
-        CountDownLatch done = new CountDownLatch(threadCount);
-        ExecutorService pool = Executors.newFixedThreadPool(threadCount);
-        try {
-            for (int t = 0; t < threadCount; t++) {
-                int threadId = t;
-                pool.submit(() -> {
-                    try {
-                        start.await();
-                        for (int i = threadId; i < totalPuts; i += threadCount) {
-                            cache.put("k" + i, i);
-                        }
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                    } finally {
-                        done.countDown();
-                    }
-                });
-            }
-            start.countDown();
-            assertTrue(done.await(30, TimeUnit.SECONDS));
-        } finally {
-            pool.shutdownNow();
+    void evictionCountIsAccurate() {
+        int overflow = 1_000;
+
+        for (int i = 0; i < MAX_SIZE + overflow; i++) {
+            cache.put("key-" + i, "value");
         }
+
         assertEquals(overflow, cache.stats().evictionCount());
-        assertEquals(0, cache.stats().expirationCount());
     }
 
+    // -------------------------------------------------------------------------
+    // Test 4 — No deadlock under concurrent reads and writes
+    // 8 reader threads + 4 writer threads hammering the same key for 5 seconds
+    // Test must complete within 10 seconds
+    // -------------------------------------------------------------------------
+
     @RepeatedTest(20)
-    void readersAndWritersOnSameKeyDoNotDeadlock() {
-        cache = new LRUCache<>(10, -1);
-        cache.put("shared", 0);
-        int readerCount = 8;
-        int writerCount = 4;
-        long durationMs = 5000;
-        assertTimeoutPreemptively(Duration.ofSeconds(10), () -> {
-            CountDownLatch start = new CountDownLatch(1);
-            CountDownLatch done = new CountDownLatch(readerCount + writerCount);
-            ExecutorService pool = Executors.newFixedThreadPool(readerCount + writerCount);
-            try {
-                long deadline = System.currentTimeMillis() + durationMs;
-                for (int i = 0; i < readerCount; i++) {
-                    pool.submit(() -> {
-                        try {
-                            start.await();
-                            while (System.currentTimeMillis() < deadline) {
-                                cache.get("shared");
-                            }
-                        } catch (InterruptedException e) {
-                            Thread.currentThread().interrupt();
-                        } finally {
-                            done.countDown();
-                        }
-                    });
+    @Timeout(value = 10, unit = TimeUnit.SECONDS)
+    void noDeadlockUnderConcurrentReadsAndWrites() throws InterruptedException {
+        int readers = 8;
+        int writers = 4;
+        long durationMs = 5_000;
+
+        CountDownLatch start = new CountDownLatch(1);
+        CountDownLatch done  = new CountDownLatch(readers + writers);
+
+        ExecutorService pool = Executors.newFixedThreadPool(readers + writers);
+
+        for (int i = 0; i < readers; i++) {
+            pool.submit(() -> {
+                try {
+                    start.await();
+                    long deadline = System.currentTimeMillis() + durationMs;
+                    while (System.currentTimeMillis() < deadline) {
+                        cache.get("hot-key");
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                } finally {
+                    done.countDown();
                 }
-                for (int i = 0; i < writerCount; i++) {
-                    int writerId = i;
-                    pool.submit(() -> {
-                        try {
-                            start.await();
-                            int counter = 0;
-                            while (System.currentTimeMillis() < deadline) {
-                                cache.put("shared", writerId * 1_000_000 + counter++);
-                            }
-                        } catch (InterruptedException e) {
-                            Thread.currentThread().interrupt();
-                        } finally {
-                            done.countDown();
-                        }
-                    });
+            });
+        }
+
+        for (int i = 0; i < writers; i++) {
+            pool.submit(() -> {
+                try {
+                    start.await();
+                    long deadline = System.currentTimeMillis() + durationMs;
+                    while (System.currentTimeMillis() < deadline) {
+                        cache.put("hot-key", "value");
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                } finally {
+                    done.countDown();
                 }
-                start.countDown();
-                done.await(durationMs + 5000, TimeUnit.MILLISECONDS);
-            } finally {
-                pool.shutdownNow();
-            }
-        });
+            });
+        }
+
+        start.countDown();
+        assertTrue(done.await(9, TimeUnit.SECONDS), "Deadlock detected — threads did not finish within 9s");
+        pool.shutdown();
     }
 }

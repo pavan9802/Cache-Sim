@@ -66,10 +66,16 @@
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-compiler-plugin</artifactId>
         <configuration>
-          <compilerArgs>
-            <!-- Required to access @Contended and internal VM annotations in stress tests -->
-            <arg>--add-opens=java.base/jdk.internal.vm.annotation=ALL-UNNAMED</arg>
-          </compilerArgs>
+          <annotationProcessorPaths>
+            <!-- maven-compiler-plugin 3.6+ does not auto-discover processors on the compile
+                 classpath; jcstress-core must be listed here explicitly so its processor
+                 generates META-INF/TestList and the per-test runner classes. -->
+            <path>
+              <groupId>org.openjdk.jcstress</groupId>
+              <artifactId>jcstress-core</artifactId>
+              <version>${jcstress.version}</version>
+            </path>
+          </annotationProcessorPaths>
         </configuration>
       </plugin>
     </plugins>

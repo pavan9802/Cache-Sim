@@ -9,7 +9,7 @@ public record CacheStats(
         long totalLoadTimeNanos,
         long snapshotTimestampMs) {
     public double hitRate() {
-        long total = hitCount + missCount;
+        long total = requestCount();
         return total == 0 ? 0.0 : (double) hitCount / total;
     }
 

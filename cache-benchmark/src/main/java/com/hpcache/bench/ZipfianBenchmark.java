@@ -7,7 +7,7 @@ import org.openjdk.jmh.infra.Blackhole;
 
 import com.hpcache.sim.MarketDataSimulator;
 
-public class ZipfianBenchmark extends BenchmarkBase {
+public class ZipfianBenchmark extends Phase1BenchmarkBase {
 
     @Benchmark
     public void zipfian(Blackhole bh, ThreadState ts) {

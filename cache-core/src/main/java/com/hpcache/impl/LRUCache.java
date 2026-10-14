@@ -217,6 +217,7 @@ public class LRUCache<K, V> implements Cache<K, V> {
      */
     @Override
     public void invalidate(K key) {
+        rejectNullKey(key);
         lock.writeLock().lock();
         try {
             CacheEntry<V> entry = map.remove(key);
@@ -259,6 +260,7 @@ public class LRUCache<K, V> implements Cache<K, V> {
      */
     @Override
     public boolean containsKey(K key) {
+        rejectNullKey(key);
         lock.writeLock().lock();
         try {
             CacheEntry<V> entry = map.get(key);
@@ -337,6 +339,7 @@ public class LRUCache<K, V> implements Cache<K, V> {
      * @param cause the reason for removal
      */
     private void notifyRemoval(K key, V value, RemovalCause cause) {
+        rejectNullKey(key);
         if (removalListener != null) {
             try {
                 removalListener.onRemoval(key, value, cause);

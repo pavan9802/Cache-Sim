@@ -47,6 +47,7 @@ public class LRUCache<K, V> implements Cache<K, V> {
     private final AtomicLong hitCount = new AtomicLong();
     private final AtomicLong missCount = new AtomicLong();
     private final AtomicLong evictionCount = new AtomicLong();
+    private final AtomicLong expirationCount = new AtomicLong();
     private final AtomicBoolean closed = new AtomicBoolean(false);
 
     /**
@@ -142,6 +143,7 @@ public class LRUCache<K, V> implements Cache<K, V> {
                 map.remove(key);
                 evictionCount.incrementAndGet();
                 missCount.incrementAndGet();
+                expirationCount.incrementAndGet();
                 notifyRemoval(key, entry.value(), RemovalCause.EXPIRED);
                 return null;
             }
@@ -302,7 +304,7 @@ public class LRUCache<K, V> implements Cache<K, V> {
             hitCount.get(),
             missCount.get(),
             evictionCount.get(),
-            0L,
+            expirationCount.get(),
             0L,
             0L,
             System.currentTimeMillis()
@@ -359,6 +361,7 @@ public class LRUCache<K, V> implements Cache<K, V> {
             map.entrySet().removeIf(entry -> {
                 if (entry.getValue().isExpired()) {
                     evictionCount.incrementAndGet();
+                    expirationCount.incrementAndGet();
                     notifyRemoval(entry.getKey(), entry.getValue().value(), RemovalCause.EXPIRED);
                     return true;
                 }

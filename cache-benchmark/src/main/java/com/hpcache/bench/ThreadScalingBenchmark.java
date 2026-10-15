@@ -6,7 +6,7 @@ import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.Threads;
 import org.openjdk.jmh.infra.Blackhole;
 
-public class ThreadScalingBenchmark extends Phase1BenchmarkBase {
+public class ThreadScalingBenchmark extends Phase2aBenchmarkBase {
 
     @Benchmark
     @Threads(1)

@@ -6,7 +6,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import org.slf4j.Logger;
@@ -44,10 +43,11 @@ public class LRUCache<K, V> implements Cache<K, V> {
     private final long defaultTtlMs;
     private final RemovalListener<K, V> removalListener;
     private final ScheduledExecutorService cleaner;
-    private final AtomicLong hitCount = new AtomicLong();
-    private final AtomicLong missCount = new AtomicLong();
-    private final AtomicLong evictionCount = new AtomicLong();
-    private final AtomicLong expirationCount = new AtomicLong();
+    // Incremented exclusively under writeLock — volatile for visibility in stats() which reads without a lock.
+    private volatile long hitCount;
+    private volatile long missCount;
+    private volatile long evictionCount;
+    private volatile long expirationCount;
     private final AtomicBoolean closed = new AtomicBoolean(false);
 
     /**
@@ -75,7 +75,7 @@ public class LRUCache<K, V> implements Cache<K, V> {
             @Override
             protected boolean removeEldestEntry(Map.Entry<K, CacheEntry<V>> eldest) {
                 if (size() > maxSize) {
-                    evictionCount.incrementAndGet();
+                    evictionCount++;
                     notifyRemoval(eldest.getKey(), eldest.getValue().value(), RemovalCause.SIZE);
                     return true;
                 }
@@ -136,18 +136,18 @@ public class LRUCache<K, V> implements Cache<K, V> {
         try {
             CacheEntry<V> entry = map.get(key);
             if (entry == null) {
-                missCount.incrementAndGet();
+                missCount++;
                 return null;
             }
             if (entry.isExpired()) {
                 map.remove(key);
-                evictionCount.incrementAndGet();
-                missCount.incrementAndGet();
-                expirationCount.incrementAndGet();
+                evictionCount++;
+                missCount++;
+                expirationCount++;
                 notifyRemoval(key, entry.value(), RemovalCause.EXPIRED);
                 return null;
             }
-            hitCount.incrementAndGet();
+            hitCount++;
             return entry.value();
         } finally {
             lock.writeLock().unlock();
@@ -303,10 +303,10 @@ public class LRUCache<K, V> implements Cache<K, V> {
     @Override
     public CacheStats stats() {
         return new CacheStats(
-            hitCount.get(),
-            missCount.get(),
-            evictionCount.get(),
-            expirationCount.get(),
+            hitCount,
+            missCount,
+            evictionCount,
+            expirationCount,
             0L,
             0L,
             System.currentTimeMillis()
@@ -363,8 +363,8 @@ public class LRUCache<K, V> implements Cache<K, V> {
         try {
             map.entrySet().removeIf(entry -> {
                 if (entry.getValue().isExpired()) {
-                    evictionCount.incrementAndGet();
-                    expirationCount.incrementAndGet();
+                    evictionCount++;
+                    expirationCount++;
                     notifyRemoval(entry.getKey(), entry.getValue().value(), RemovalCause.EXPIRED);
                     return true;
                 }

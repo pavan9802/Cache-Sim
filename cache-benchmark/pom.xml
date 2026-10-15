@@ -55,6 +55,21 @@
 
   <build>
     <plugins>
+      <!-- Explicitly wire the JMH annotation processor so META-INF/BenchmarkList is generated. -->
+      <!-- Provided-scope deps are NOT auto-discovered as annotation processors in modern Maven. -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <configuration>
+          <annotationProcessorPaths>
+            <path>
+              <groupId>org.openjdk.jmh</groupId>
+              <artifactId>jmh-generator-annprocess</artifactId>
+              <version>${jmh.version}</version>
+            </path>
+          </annotationProcessorPaths>
+        </configuration>
+      </plugin>
       <!-- Package as a single fat JAR so JMH can be invoked via: java -jar benchmarks.jar -->
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>

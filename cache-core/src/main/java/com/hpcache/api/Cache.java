@@ -6,7 +6,7 @@ package com.hpcache.api;
  * <p>Thread safety: all implementations must be thread-safe unless explicitly documented
  * otherwise. {@code K} must implement {@code hashCode()} and {@code equals()}.
  */
-public interface Cache<K, V> {
+public interface Cache<K, V> extends AutoCloseable {
 
     /**
      * Returns the value for {@code key}, or {@code null} on a cache miss.
@@ -57,5 +57,6 @@ public interface Cache<K, V> {
      * Releases resources held by this cache (background threads, off-heap memory, etc.).
      * Idempotent — safe to call more than once.
      */
+    @Override
     void close();
 }

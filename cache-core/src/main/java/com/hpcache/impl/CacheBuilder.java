@@ -36,6 +36,7 @@ public final class CacheBuilder<K, V> {
     @SuppressWarnings("unused")                  // no-op in Phase 1; LRUCache always records stats
     private boolean recordStats = false;
     private RemovalListener<K, V> removalListener;
+    private int stripeCount = 0;                   // 0 means use LRUCache (no striping)
 
     private CacheBuilder() {}
 
@@ -119,11 +120,31 @@ public final class CacheBuilder<K, V> {
     }
 
     /**
+     * Enables lock striping across N independent segments for higher concurrency.
+     *
+     * <p>When set, {@link #build()} returns a {@link StripedCache} instead of {@link LRUCache}.
+     * The actual stripe count is rounded up to the next power of two. If this method is
+     * never called, {@link #build()} returns an {@link LRUCache}.
+     *
+     * @param stripeCount desired number of stripes; must be &gt;= 2
+     * @return this builder (for chaining)
+     * @throws IllegalArgumentException if {@code stripeCount} is less than 2
+     */
+    public CacheBuilder<K, V> stripeCount(int stripeCount) {
+        if (stripeCount < 2) {
+            throw new IllegalArgumentException(
+                "stripeCount must be >= 2 (was " + stripeCount + "). Omit stripeCount() to get a plain LRUCache.");
+        }
+        this.stripeCount = stripeCount;
+        return this;
+    }
+
+    /**
      * Validates the configuration and constructs the cache.
      *
-     * <p>The current implementation always returns an {@link LRUCache}. Later phases will
-     * select among {@code StripedCache}, {@code StampedCache}, and {@code TinyLFUCache}
-     * based on additional builder flags.
+     * <p>Returns a {@link StripedCache} when {@code stripeCount > 1} was configured via
+     * {@link #stripeCount(int)}, otherwise returns an {@link LRUCache}. Later phases will
+     * add {@code StampedCache} and {@code TinyLFUCache} options.
      *
      * @return a new, empty {@link Cache} instance
      * @throws IllegalStateException if {@code maxSize} was not set or is &lt;= 0,
@@ -141,6 +162,10 @@ public final class CacheBuilder<K, V> {
         if (cleanupIntervalMs <= 0) {
             throw new IllegalStateException(
                 "cleanupInterval must be > 0 ms (was " + cleanupIntervalMs + " ms).");
+        }
+
+        if (stripeCount > 0) {
+            return new StripedCache<>(maxSize, ttlMs, stripeCount, removalListener, cleanupIntervalMs);
         }
 
         return new LRUCache<>(

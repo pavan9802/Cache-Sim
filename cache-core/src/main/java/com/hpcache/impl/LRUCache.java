@@ -15,6 +15,7 @@ import com.hpcache.api.Cache;
 import com.hpcache.api.CacheStats;
 import com.hpcache.api.RemovalCause;
 import com.hpcache.api.RemovalListener;
+import com.hpcache.internal.CacheSupport;
 import com.hpcache.internal.entry.CacheEntry;
 
 import net.jcip.annotations.ThreadSafe;
@@ -76,7 +77,7 @@ public class LRUCache<K, V> implements Cache<K, V> {
             protected boolean removeEldestEntry(Map.Entry<K, CacheEntry<V>> eldest) {
                 if (size() > maxSize) {
                     evictionCount++;
-                    notifyRemoval(eldest.getKey(), eldest.getValue().value(), RemovalCause.SIZE);
+                    CacheSupport.notifyRemoval(removalListener, log,  eldest.getKey(), eldest.getValue().value(), RemovalCause.SIZE);
                     return true;
                 }
                 return false;
@@ -131,7 +132,7 @@ public class LRUCache<K, V> implements Cache<K, V> {
      */
     @Override
     public V get(K key) {
-        rejectNullKey(key);
+        CacheSupport.rejectNullKey(key);
         lock.writeLock().lock();
         try {
             CacheEntry<V> entry = map.get(key);
@@ -144,7 +145,7 @@ public class LRUCache<K, V> implements Cache<K, V> {
                 evictionCount++;
                 missCount++;
                 expirationCount++;
-                notifyRemoval(key, entry.value(), RemovalCause.EXPIRED);
+                CacheSupport.notifyRemoval(removalListener, log,  key, entry.value(), RemovalCause.EXPIRED);
                 return null;
             }
             hitCount++;
@@ -168,15 +169,13 @@ public class LRUCache<K, V> implements Cache<K, V> {
      */
     @Override
     public void put(K key, V value) {
-        rejectNullKey(key);
+        CacheSupport.rejectNullKey(key);
         lock.writeLock().lock();
         try {
-            CacheEntry<V> newEntry = defaultTtlMs > 0
-                ? CacheEntry.withTtl(value, defaultTtlMs)
-                : CacheEntry.noExpiry(value);
+            CacheEntry<V> newEntry = CacheEntry.withDefaultTtl(value, defaultTtlMs);
             CacheEntry<V> previous = map.put(key, newEntry);
             if (previous != null) {
-                notifyRemoval(key, previous.value(), RemovalCause.EXPLICIT);
+                CacheSupport.notifyRemoval(removalListener, log, key, previous.value(), RemovalCause.EXPLICIT);
             }
         } finally {
             lock.writeLock().unlock();
@@ -197,12 +196,12 @@ public class LRUCache<K, V> implements Cache<K, V> {
      */
     @Override
     public void put(K key, V value, long ttlMs) {
-        rejectNullKey(key);
+        CacheSupport.rejectNullKey(key);
         lock.writeLock().lock();
         try {
             CacheEntry<V> previous = map.put(key, CacheEntry.withTtl(value, ttlMs));
             if (previous != null) {
-                notifyRemoval(key, previous.value(), RemovalCause.EXPLICIT);
+                CacheSupport.notifyRemoval(removalListener, log, key, previous.value(), RemovalCause.EXPLICIT);
             }
         } finally {
             lock.writeLock().unlock();
@@ -217,12 +216,12 @@ public class LRUCache<K, V> implements Cache<K, V> {
      */
     @Override
     public void invalidate(K key) {
-        rejectNullKey(key);
+        CacheSupport.rejectNullKey(key);
         lock.writeLock().lock();
         try {
             CacheEntry<V> entry = map.remove(key);
             if (entry != null) {
-                notifyRemoval(key, entry.value(), RemovalCause.EXPLICIT);
+                CacheSupport.notifyRemoval(removalListener, log, key, entry.value(), RemovalCause.EXPLICIT);
             }
         } finally {
             lock.writeLock().unlock();
@@ -241,7 +240,7 @@ public class LRUCache<K, V> implements Cache<K, V> {
         lock.writeLock().lock();
         try {
             if (removalListener != null) {
-                map.forEach((k, entry) -> notifyRemoval(k, entry.value(), RemovalCause.EXPLICIT));
+                map.forEach((k, entry) -> CacheSupport.notifyRemoval(removalListener, log,  k, entry.value(), RemovalCause.EXPLICIT));
             }
             map.clear();
         } finally {
@@ -260,7 +259,7 @@ public class LRUCache<K, V> implements Cache<K, V> {
      */
     @Override
     public boolean containsKey(K key) {
-        rejectNullKey(key);
+        CacheSupport.rejectNullKey(key);
         lock.writeLock().lock();
         try {
             CacheEntry<V> entry = map.get(key);
@@ -328,28 +327,6 @@ public class LRUCache<K, V> implements Cache<K, V> {
     }
 
     /**
-     * Delivers a removal notification to the {@link RemovalListener}, if one is registered.
-     *
-     * <p>Must be called while holding the write lock. Any exception thrown by the listener
-     * is caught and logged — it must not propagate, as doing so would corrupt the lock state
-     * of the caller.
-     *
-     * @param key   the key being removed
-     * @param value the value that was associated with {@code key}
-     * @param cause the reason for removal
-     */
-    private void notifyRemoval(K key, V value, RemovalCause cause) {
-        rejectNullKey(key);
-        if (removalListener != null) {
-            try {
-                removalListener.onRemoval(key, value, cause);
-            } catch (Exception e) {
-                log.warn("RemovalListener threw for key {}", key, e);
-            }
-        }
-    }
-
-    /**
      * Scans all entries and removes those whose TTL has elapsed.
      *
      * <p>Called by the background cleaner on a fixed 1-second interval. Acquires the
@@ -365,7 +342,7 @@ public class LRUCache<K, V> implements Cache<K, V> {
                 if (entry.getValue().isExpired()) {
                     evictionCount++;
                     expirationCount++;
-                    notifyRemoval(entry.getKey(), entry.getValue().value(), RemovalCause.EXPIRED);
+                    CacheSupport.notifyRemoval(removalListener, log, entry.getKey(), entry.getValue().value(), RemovalCause.EXPIRED);
                     return true;
                 }
                 return false;
@@ -375,7 +352,4 @@ public class LRUCache<K, V> implements Cache<K, V> {
         }
     }
 
-    private void rejectNullKey(K key){
-        if (key == null) throw new NullPointerException("key must not be null");
-    }
 }

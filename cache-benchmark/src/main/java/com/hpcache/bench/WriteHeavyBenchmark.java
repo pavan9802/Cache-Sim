@@ -7,7 +7,7 @@ import org.openjdk.jmh.infra.Blackhole;
 
 import com.hpcache.sim.MarketDataSimulator;
 
-public class WriteHeavyBenchmark extends Phase2aBenchmarkBase {
+public class WriteHeavyBenchmark extends Phase2bBenchmarkBase {
     
     @Benchmark
     public void writeHeavy(Blackhole bh, ThreadState ts) {

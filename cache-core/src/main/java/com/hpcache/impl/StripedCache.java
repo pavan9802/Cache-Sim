@@ -6,6 +6,7 @@ import java.util.function.Consumer;
 import com.hpcache.api.Cache;
 import com.hpcache.api.CacheStats;
 import com.hpcache.api.RemovalListener;
+import com.hpcache.internal.CacheSupport;
 
 import net.jcip.annotations.ThreadSafe;
 
@@ -68,7 +69,7 @@ public class StripedCache<K, V> implements Cache<K, V>{
      */
     @Override
     public V get(K key) {
-        rejectNullKey(key);
+        CacheSupport.rejectNullKey(key);
         return segments[stripeFor(key)].get(key);
     }
 
@@ -79,7 +80,7 @@ public class StripedCache<K, V> implements Cache<K, V>{
      */
     @Override
     public void put(K key, V value) {
-        rejectNullKey(key);
+        CacheSupport.rejectNullKey(key);
         segments[stripeFor(key)].put(key, value);
     }
 
@@ -91,7 +92,7 @@ public class StripedCache<K, V> implements Cache<K, V>{
      */
     @Override
     public void put(K key, V value, long ttlMs) {
-        rejectNullKey(key);
+        CacheSupport.rejectNullKey(key);
         segments[stripeFor(key)].put(key, value, ttlMs);
     }
 
@@ -102,7 +103,7 @@ public class StripedCache<K, V> implements Cache<K, V>{
      */
     @Override
     public void invalidate(K key) {
-        rejectNullKey(key);
+        CacheSupport.rejectNullKey(key);
         segments[stripeFor(key)].invalidate(key);
     }
 
@@ -121,7 +122,7 @@ public class StripedCache<K, V> implements Cache<K, V>{
      */
     @Override
     public boolean containsKey(K key) {
-        rejectNullKey(key);
+        CacheSupport.rejectNullKey(key);
         return segments[stripeFor(key)].containsKey(key);
     }
 
@@ -216,16 +217,21 @@ public class StripedCache<K, V> implements Cache<K, V>{
         }
     }
 
-    /** @throws NullPointerException if {@code key} is null */
-    private void rejectNullKey(K key) {
-        if (key == null) throw new NullPointerException("key must not be null");
-    }
 
     /** Returns the smallest power of two that is {@code >= n}. */
     private static int nextPowerOfTwo(int n) {
         return n <= 1 ? 1 : Integer.highestOneBit(n - 1) << 1;
     }
 
+    /**
+     * Returns the number of entries in each segment as a snapshot array.
+     *
+     * <p>Intended for testing and diagnostics. The array length equals {@link #stripeCount()}.
+     * Each element is the size of the corresponding segment at the moment of the call; concurrent
+     * writes may change values immediately after they are read.
+     *
+     * @return array of per-segment entry counts, indexed by stripe
+     */
     int[] segmentSizes() {
         int[] sizes = new int[stripeCount];
         for (int i = 0; i < stripeCount; i++) {

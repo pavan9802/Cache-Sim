@@ -37,6 +37,7 @@ public final class CacheBuilder<K, V> {
     private boolean recordStats = false;
     private RemovalListener<K, V> removalListener;
     private int stripeCount = 0;                   // 0 means use LRUCache (no striping)
+    private boolean optimisticReads = false;
 
     private CacheBuilder() {}
 
@@ -140,11 +141,29 @@ public final class CacheBuilder<K, V> {
     }
 
     /**
+     * Enables optimistic reads via {@link java.util.concurrent.locks.StampedLock}.
+     *
+     * <p>When set, {@link #build()} returns a {@link StampedCache} instead of {@link LRUCache}.
+     * Combine with {@link #stripeCount(int)} — if both are set, {@code stripeCount} takes
+     * precedence and returns a {@link StripedCache} (striped + optimistic is Phase 3+).
+     *
+     * <p>Trade-off: optimistic reads win under low write rates (&lt;10% writes) and lose
+     * under write-heavy workloads (&gt;30% writes) where {@code validate()} fails frequently.
+     *
+     * @param optimisticReads {@code true} to use {@link StampedCache}
+     * @return this builder (for chaining)
+     */
+    public CacheBuilder<K, V> optimisticReads(boolean optimisticReads) {
+        this.optimisticReads = optimisticReads;
+        return this;
+    }
+
+    /**
      * Validates the configuration and constructs the cache.
      *
-     * <p>Returns a {@link StripedCache} when {@code stripeCount > 1} was configured via
-     * {@link #stripeCount(int)}, otherwise returns an {@link LRUCache}. Later phases will
-     * add {@code StampedCache} and {@code TinyLFUCache} options.
+     * <p>Returns a {@link StripedCache} when {@code stripeCount > 1} was configured,
+     * a {@link StampedCache} when {@code optimisticReads(true)} was set,
+     * otherwise an {@link LRUCache}.
      *
      * @return a new, empty {@link Cache} instance
      * @throws IllegalStateException if {@code maxSize} was not set or is &lt;= 0,
@@ -166,6 +185,14 @@ public final class CacheBuilder<K, V> {
 
         if (stripeCount > 0) {
             return new StripedCache<>(maxSize, ttlMs, stripeCount, removalListener, cleanupIntervalMs);
+        }
+
+        if (optimisticReads) {
+            return new StampedCache<>(maxSize, ttlMs, removalListener,
+                Executors.newSingleThreadScheduledExecutor(
+                    Thread.ofVirtual().name("stamped-cache-cleaner").factory()
+                ),
+                cleanupIntervalMs);
         }
 
         return new LRUCache<>(

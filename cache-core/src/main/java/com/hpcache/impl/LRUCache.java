@@ -120,6 +120,28 @@ public class LRUCache<K, V> implements Cache<K, V> {
     }
 
     /**
+     * Returns the raw {@link CacheEntry} for {@code key} without updating stats, or
+     * {@code null} if the key is absent or expired.
+     *
+     * <p>Acquires the write lock because {@code LinkedHashMap} with {@code accessOrder=true}
+     * mutates node order on every lookup. Used by {@code AsyncLoadingCacheImpl} to read
+     * expiry metadata for refresh-ahead without going through the public {@link Cache} API.
+     *
+     * @param key the key to peek; must not be {@code null}
+     * @return the live entry, or {@code null} if absent or expired
+     */
+    CacheEntry<V> peekEntry(K key) {
+        lock.writeLock().lock();
+        try {
+            CacheEntry<V> entry = map.get(key);
+            if (entry == null || entry.isExpired()) return null;
+            return entry;
+        } finally {
+            lock.writeLock().unlock();
+        }
+    }
+
+    /**
      * Returns the value for {@code key}, or {@code null} on a cache miss or expired entry.
      *
      * <p>Acquires the <em>write</em> lock because {@code LinkedHashMap} with

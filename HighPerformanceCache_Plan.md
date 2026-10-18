@@ -1087,7 +1087,7 @@ public V get(K key) {
 
 ---
 
-### 2C — `LoadingCache.java`
+### 2C — `LoadingCache.java` ✓ COMPLETE
 
 Extends `Cache<K,V>` with a loader function and thundering herd prevention.
 
@@ -1196,9 +1196,9 @@ private void maybeRefreshAhead(K key, CacheEntry<V> entry) {
 - [ ] JMH thread scaling benchmark shows near-linear scaling up to stripe count
 - [ ] `StampedCache` implemented with optimistic read + fallback to read lock
 - [ ] Benchmark comparison documented: StampedLock vs ReadWriteLock under 95/5 and 50/50
-- [ ] `LoadingCache` with `ConcurrentHashMap<K, CompletableFuture>` for in-flight deduplication
-- [ ] Thundering herd test passes — loader called exactly once for 16 concurrent misses
-- [ ] `AsyncLoadingCache` with refresh-ahead that never blocks callers
+- [x] `LoadingCache` with `ConcurrentHashMap<K, CompletableFuture>` for in-flight deduplication
+- [x] Thundering herd test passes — loader called exactly once for 16 concurrent misses
+- [x] `AsyncLoadingCache` with refresh-ahead that never blocks callers
 - [ ] `results/phase-2.json` saved — shows improvement over phase-1
 
 ---

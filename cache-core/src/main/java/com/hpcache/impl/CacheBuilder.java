@@ -2,8 +2,11 @@ package com.hpcache.impl;
 
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 
+import com.hpcache.api.AsyncLoadingCache;
 import com.hpcache.api.Cache;
+import com.hpcache.api.LoadingCache;
 import com.hpcache.api.RemovalListener;
 
 /**
@@ -38,6 +41,7 @@ public final class CacheBuilder<K, V> {
     private RemovalListener<K, V> removalListener;
     private int stripeCount = 0;                   // 0 means use LRUCache (no striping)
     private boolean optimisticReads = false;
+    private Function<K, V> loader = null;
 
     private CacheBuilder() {}
 
@@ -156,6 +160,82 @@ public final class CacheBuilder<K, V> {
     public CacheBuilder<K, V> optimisticReads(boolean optimisticReads) {
         this.optimisticReads = optimisticReads;
         return this;
+    }
+
+    /**
+     * Sets the loader function invoked by {@link LoadingCache#getOrLoad}.
+     *
+     * <p>Required when calling {@link #buildLoadingCache()}. Has no effect on {@link #build()}.
+     *
+     * @param loader function that computes a value for a missing key; must not be {@code null}
+     * @return this builder (for chaining)
+     */
+    public CacheBuilder<K, V> loader(Function<K, V> loader) {
+        this.loader = loader;
+        return this;
+    }
+
+    /**
+     * Validates the configuration and constructs a {@link LoadingCache}.
+     *
+     * <p>Wraps an {@link LRUCache} delegate in a {@link LoadingCacheImpl}. The {@code loader}
+     * may be {@code null} if the caller will always use {@link LoadingCache#get(Object, java.util.function.Function)}.
+     *
+     * @return a new, empty {@link LoadingCache} instance
+     * @throws IllegalStateException if {@code maxSize} was not set or is &lt;= 0,
+     *                               or if a TTL was set but is &lt;= 0
+     */
+    public LoadingCache<K, V> buildLoadingCache() {
+        if (maxSize <= 0) {
+            throw new IllegalStateException(
+                "maxSize must be > 0 (was " + maxSize + "). Call .maxSize(n) before .buildLoadingCache().");
+        }
+        if (ttlSet && ttlMs <= 0) {
+            throw new IllegalStateException(
+                "TTL must be > 0 ms (was " + ttlMs + " ms). Pass a positive duration to .ttl().");
+        }
+        if (cleanupIntervalMs <= 0) {
+            throw new IllegalStateException(
+                "cleanupInterval must be > 0 ms (was " + cleanupIntervalMs + " ms).");
+        }
+        return new LoadingCacheImpl<>(
+            maxSize, ttlMs, loader, removalListener,
+            Executors.newSingleThreadScheduledExecutor(
+                Thread.ofVirtual().name("loading-cache-cleaner").factory()),
+            cleanupIntervalMs
+        );
+    }
+
+    /**
+     * Validates the configuration and constructs an {@link AsyncLoadingCache}.
+     *
+     * <p>Wraps an {@link LRUCache} delegate in an {@link AsyncLoadingCacheImpl}. The
+     * {@code loader} may be {@code null} if the caller will always use
+     * {@link AsyncLoadingCache#getAsync(Object, java.util.function.Function)}.
+     *
+     * @return a new, empty {@link AsyncLoadingCache} instance
+     * @throws IllegalStateException if {@code maxSize} was not set or is &lt;= 0,
+     *                               or if a TTL was set but is &lt;= 0
+     */
+    public AsyncLoadingCache<K, V> buildAsyncLoadingCache() {
+        if (maxSize <= 0) {
+            throw new IllegalStateException(
+                "maxSize must be > 0 (was " + maxSize + "). Call .maxSize(n) before .buildAsyncLoadingCache().");
+        }
+        if (ttlSet && ttlMs <= 0) {
+            throw new IllegalStateException(
+                "TTL must be > 0 ms (was " + ttlMs + " ms). Pass a positive duration to .ttl().");
+        }
+        if (cleanupIntervalMs <= 0) {
+            throw new IllegalStateException(
+                "cleanupInterval must be > 0 ms (was " + cleanupIntervalMs + " ms).");
+        }
+        return new AsyncLoadingCacheImpl<>(
+            maxSize, ttlMs, loader, removalListener,
+            Executors.newSingleThreadScheduledExecutor(
+                Thread.ofVirtual().name("async-loading-cache-cleaner").factory()),
+            cleanupIntervalMs
+        );
     }
 
     /**
